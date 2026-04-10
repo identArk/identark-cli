@@ -39,6 +39,7 @@ dependencies = [
     "toml>=0.10.2",
     "watchdog>=4.0.0",
     "python-socketio[client]>=5.11.0",
+    "PyJWT>=2.8.0",
 ]
 
 [project.optional-dependencies]
