@@ -5,7 +5,6 @@ MCP server management commands
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Optional
 
 import typer
@@ -32,7 +31,7 @@ app.add_typer(tool_app, name="tool")
 def list_servers() -> None:
     """
     List registered MCP servers
-    
+
     Shows all MCP servers configured for this organization.
     """
     try:
@@ -44,32 +43,32 @@ def list_servers() -> None:
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
-    
+
     if not servers:
         console.print("No MCP servers registered")
         console.print("Run: [cyan]identark mcp server add[/cyan]")
         return
-    
+
     table = Table(title="MCP Servers")
     table.add_column("ID", style="cyan", no_wrap=True)
     table.add_column("Name")
     table.add_column("Transport")
     table.add_column("Status")
     table.add_column("Tools")
-    
+
     for server in servers:
         tools_count = len(server.get("tools", []))
         status = server.get("status", "unknown")
         status_style = "green" if status == "active" else "yellow"
-        
+
         table.add_row(
             server["id"][:8],
             server["name"],
             server.get("transport_type", "unknown"),
             f"[{status_style}]{status}[/{status_style}]",
-            str(tools_count)
+            str(tools_count),
         )
-    
+
     console.print(table)
 
 
@@ -81,17 +80,15 @@ def add_server(
         "stdio",
         prompt=True,
         help="Transport type",
-        click_type=typer.Choice(["stdio", "http_sse", "streamable_http"])
+        click_type=typer.Choice(["stdio", "http_sse", "streamable_http"]),
     ),
     auth_type: str = typer.Option(
-        "none",
-        help="Authentication type",
-        click_type=typer.Choice(["none", "bearer", "api_key"])
+        "none", help="Authentication type", click_type=typer.Choice(["none", "bearer", "api_key"])
     ),
 ) -> None:
     """
     Register a new MCP server
-    
+
     Adds an MCP server endpoint for agents to use with
     HITL approval policies.
     """
@@ -104,28 +101,28 @@ def add_server(
         key_name = typer.prompt("API key header name", default="X-API-Key")
         key_value = typer.prompt("API key value", hide_input=True)
         auth_config = {"type": "api_key", "key_name": key_name, "key_value": key_value}
-    
+
     payload = {
         "name": name,
         "endpoint_url": endpoint,
         "transport_type": transport,
-        "auth_config": auth_config
+        "auth_config": auth_config,
     }
-    
+
     try:
         with get_api_client() as client:
             response = client.post("/v1/mcp/servers", json=payload)
             response.raise_for_status()
             server = response.json()
-        
+
         console.print(f"[green]✓ Registered MCP server:[/green] {name}")
         console.print(f"  ID: [cyan]{server['id']}[/cyan]")
-        
+
         # Offer to discover capabilities
         discover = typer.confirm("Discover server capabilities now?")
         if discover:
             _discover_server(server["id"])
-    
+
     except Exception as e:
         console.print(f"[red]Failed to register server:[/red] {e}")
         raise typer.Exit(1)
@@ -138,7 +135,7 @@ def remove_server(
 ) -> None:
     """
     Remove an MCP server
-    
+
     Unregisters the server. Existing HITL policies referencing
     this server will be deactivated.
     """
@@ -147,14 +144,14 @@ def remove_server(
         if not confirm:
             console.print("Cancelled")
             return
-    
+
     try:
         with get_api_client() as client:
             response = client.delete(f"/v1/mcp/servers/{server_id}")
             response.raise_for_status()
-        
+
         console.print(f"[green]✓ Removed MCP server[/green] {server_id}")
-    
+
     except Exception as e:
         console.print(f"[red]Failed to remove server:[/red] {e}")
         raise typer.Exit(1)
@@ -166,7 +163,7 @@ def discover_server(
 ) -> None:
     """
     Discover MCP server capabilities
-    
+
     Fetches available tools, resources, and prompts from
     the MCP server and updates the local cache.
     """
@@ -181,16 +178,16 @@ def _discover_server(server_id: str) -> None:
                 response = client.post(f"/v1/mcp/servers/{server_id}/discover")
                 response.raise_for_status()
                 result = response.json()
-            
-            console.print(f"[green]✓ Discovered capabilities[/green]")
-            
+
+            console.print("[green]✓ Discovered capabilities[/green]")
+
             if "tools" in result:
                 console.print(f"  Tools: {len(result['tools'])}")
             if "resources" in result:
                 console.print(f"  Resources: {len(result['resources'])}")
             if "prompts" in result:
                 console.print(f"  Prompts: {len(result['prompts'])}")
-        
+
         except Exception as e:
             console.print(f"[yellow]Discovery failed:[/yellow] {e}")
 
@@ -201,7 +198,7 @@ def show_server(
 ) -> None:
     """
     Show MCP server details
-    
+
     Displays full server configuration and discovered capabilities.
     """
     try:
@@ -212,7 +209,7 @@ def show_server(
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
-    
+
     # Build details panel
     content = f"""
 [bold]Name:[/bold]           {server.get('name')}
@@ -228,22 +225,19 @@ def show_server(
 
 [bold]Circuit Breaker:[/bold] {'Enabled' if server.get('circuit_breaker_enabled') else 'Disabled'}
     """
-    
+
     console.print(Panel(content, title=f"MCP Server: {server_id}", border_style="cyan"))
-    
+
     # Show tools if available
     if server.get("tools"):
         console.print("\n[bold]Available Tools:[/bold]")
         tools_table = Table()
         tools_table.add_column("Name", style="cyan")
         tools_table.add_column("Description")
-        
+
         for tool in server["tools"][:10]:  # Show first 10
-            tools_table.add_row(
-                tool.get("name", "unknown"),
-                tool.get("description", "")[:50]
-            )
-        
+            tools_table.add_row(tool.get("name", "unknown"), tool.get("description", "")[:50])
+
         console.print(tools_table)
 
 
@@ -253,7 +247,7 @@ def list_tools(
 ) -> None:
     """
     List available MCP tools
-    
+
     Shows all tools available on a specific MCP server.
     """
     try:
@@ -264,24 +258,21 @@ def list_tools(
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
-    
+
     tools = server.get("tools", [])
-    
+
     if not tools:
         console.print("No tools available on this server")
         console.print("Run: [cyan]identark mcp server discover <server_id>[/cyan]")
         return
-    
+
     table = Table(title=f"Tools on {server.get('name', server_id)}")
     table.add_column("Name", style="cyan")
     table.add_column("Description")
-    
+
     for tool in tools:
-        table.add_row(
-            tool.get("name", "unknown"),
-            tool.get("description", "No description")[:60]
-        )
-    
+        table.add_row(tool.get("name", "unknown"), tool.get("description", "No description")[:60])
+
     console.print(table)
 
 
@@ -289,14 +280,12 @@ def list_tools(
 def execute_tool(
     server_id: str = typer.Option(..., "--server", "-s", help="Server ID"),
     tool_name: str = typer.Option(..., "--tool", "-t", help="Tool name"),
-    arguments: Optional[str] = typer.Option(
-        None, "--args", "-a", help="JSON arguments"
-    ),
+    arguments: Optional[str] = typer.Option(None, "--args", "-a", help="JSON arguments"),
     wait: bool = typer.Option(True, "--wait/--no-wait", help="Wait for HITL approval"),
 ) -> None:
     """
     Execute an MCP tool
-    
+
     Executes a tool through the MCP Gateway with HITL.
     High-risk operations will require approval.
     """
@@ -308,22 +297,18 @@ def execute_tool(
         except json.JSONDecodeError:
             console.print("[red]Invalid JSON in arguments[/red]")
             raise typer.Exit(1)
-    
-    payload = {
-        "server_id": server_id,
-        "tool_name": tool_name,
-        "arguments": args
-    }
-    
+
+    payload = {"server_id": server_id, "tool_name": tool_name, "arguments": args}
+
     try:
         with console.status("Executing tool..."):
             with get_api_client() as client:
                 response = client.post("/v1/mcp/execute", json=payload)
-                
+
                 if response.status_code == 202:
                     # HITL required
                     console.print("[yellow]⏳ HITL approval required[/yellow]")
-                    
+
                     if wait:
                         console.print("Waiting for approval...")
                         # Poll for result
@@ -331,13 +316,13 @@ def execute_tool(
                     else:
                         console.print("Run [cyan]identark approvals list[/cyan] to check status")
                     return
-                
+
                 response.raise_for_status()
                 result = response.json()
-        
+
         console.print("[green]✓ Tool executed successfully[/green]")
         console.print(JSON(json.dumps(result, indent=2)))
-    
+
     except Exception as e:
         console.print(f"[red]Execution failed:[/red] {e}")
         raise typer.Exit(1)
@@ -350,7 +335,7 @@ def manage_policy(
 ) -> None:
     """
     Manage HITL policies for MCP
-    
+
     Configure approval policies for MCP server operations.
     """
     console.print("[bold]MCP HITL Policies[/bold]\n")

@@ -49,7 +49,7 @@ def get_auth_status() -> AuthStatus:
         return AuthStatus(authenticated=False)
 
 
-def login(api_url: str = "https://identark-cloud.fly.dev", browser: bool = True) -> None:
+def login(api_url: str = "https://api.identark.io", browser: bool = True) -> None:
     """
     Authenticate with IdentArk via Firebase device code flow
 

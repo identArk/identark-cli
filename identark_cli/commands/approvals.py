@@ -4,16 +4,14 @@ HITL Approval commands
 
 from __future__ import annotations
 
-import asyncio
 import time
 from typing import Optional
 
 import typer
+from rich import box
 from rich.console import Console
-from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
-from rich import box
 
 from identark_cli.core.auth import get_api_client
 
@@ -28,7 +26,7 @@ def list_approvals(
 ) -> None:
     """
     List approval requests
-    
+
     Shows pending, approved, or rejected HITL requests.
     """
     try:
@@ -39,36 +37,36 @@ def list_approvals(
     except Exception as e:
         console.print(f"[red]Error fetching approvals:[/red] {e}")
         raise typer.Exit(1)
-    
+
     if not approvals:
         console.print("No pending approvals")
         return
-    
+
     table = Table(title=f"Pending Approvals ({len(approvals)})", box=box.ROUNDED)
     table.add_column("ID", style="cyan", no_wrap=True)
     table.add_column("Tool")
     table.add_column("Risk")
     table.add_column("Requested By")
     table.add_column("Age")
-    
+
     for approval in approvals:
         risk_score = approval.get("risk_score", 0)
         risk_style = _risk_style(risk_score)
-        
+
         # Calculate age
         created = approval.get("created_at", "")
         age = _time_since(created)
-        
+
         table.add_row(
             approval["id"][:8],
             approval.get("tool_name", "unknown"),
             f"[{risk_style}]{risk_score}[/{risk_style}]",
             approval.get("requested_by", "unknown"),
-            age
+            age,
         )
-    
+
     console.print(table)
-    
+
     console.print("\n[dim]Run [cyan]identark approvals inspect <id>[/cyan] for details[/dim]")
 
 
@@ -78,7 +76,7 @@ def inspect(
 ) -> None:
     """
     Inspect approval request details
-    
+
     Shows full details including tool arguments, risk factors,
     and approval history.
     """
@@ -90,12 +88,12 @@ def inspect(
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
-    
+
     # Build detail panel
     risk_score = approval.get("risk_score", 0)
     risk_level = approval.get("risk_level", "unknown")
     risk_style = _risk_style(risk_score)
-    
+
     content = f"""
 [bold]Tool:[/bold]         {approval.get('tool_name', 'unknown')}
 [bold]Status:[/bold]       {approval.get('status', 'unknown')}
@@ -112,9 +110,9 @@ def inspect(
 {approval.get('tool_arguments', {})}
 ```
     """
-    
+
     console.print(Panel(content, title=f"Approval Request: {approval_id}", border_style="cyan"))
-    
+
     if approval.get("status") == "pending":
         console.print("\n[bold]Actions:[/bold]")
         console.print(f"  [cyan]identark approvals approve {approval_id}[/cyan]")
@@ -129,7 +127,7 @@ def approve(
 ) -> None:
     """
     Approve a pending request
-    
+
     Approves the HITL request and allows the agent to proceed.
     High-risk operations (>70) require MFA verification.
     """
@@ -139,30 +137,23 @@ def approve(
             response = client.get(f"/v1/mcp/approvals/{approval_id}")
             response.raise_for_status()
             approval = response.json()
-            
+
             # Check if MFA required
             if approval.get("risk_score", 0) >= 70 and not mfa_code:
                 console.print("[yellow]This operation requires MFA verification[/yellow]")
                 mfa_code = typer.prompt("Enter MFA code", hide_input=True)
-            
+
             # Submit approval
-            payload = {
-                "decision": "approved",
-                "comment": comment,
-                "mfa_token": mfa_code
-            }
-            
-            response = client.post(
-                f"/v1/mcp/approvals/{approval_id}/decision",
-                json=payload
-            )
+            payload = {"decision": "approved", "comment": comment, "mfa_token": mfa_code}
+
+            response = client.post(f"/v1/mcp/approvals/{approval_id}/decision", json=payload)
             response.raise_for_status()
-        
+
         console.print(f"[green]✓ Approved request {approval_id}[/green]")
-        
+
         if approval.get("tool_name"):
             console.print(f"  Tool: [cyan]{approval['tool_name']}[/cyan]")
-    
+
     except Exception as e:
         console.print(f"[red]Approval failed:[/red] {e}")
         raise typer.Exit(1)
@@ -175,26 +166,20 @@ def reject(
 ) -> None:
     """
     Reject a pending request
-    
+
     Rejects the HITL request and prevents the agent from
     executing the operation.
     """
     try:
         with get_api_client() as client:
-            payload = {
-                "decision": "rejected",
-                "comment": reason
-            }
-            
-            response = client.post(
-                f"/v1/mcp/approvals/{approval_id}/decision",
-                json=payload
-            )
+            payload = {"decision": "rejected", "comment": reason}
+
+            response = client.post(f"/v1/mcp/approvals/{approval_id}/decision", json=payload)
             response.raise_for_status()
-        
+
         console.print(f"[yellow]✗ Rejected request {approval_id}[/yellow]")
         console.print(f"  Reason: {reason}")
-    
+
     except Exception as e:
         console.print(f"[red]Rejection failed:[/red] {e}")
         raise typer.Exit(1)
@@ -207,13 +192,13 @@ def watch(
 ) -> None:
     """
     Watch approvals in real-time
-    
+
     Interactive terminal UI for monitoring and approving
     HITL requests as they arrive.
     """
     console.print("[bold]Watching for approval requests...[/bold]")
     console.print("[dim]Press Ctrl+C to exit[/dim]\n")
-    
+
     try:
         while True:
             # Fetch pending approvals
@@ -226,7 +211,7 @@ def watch(
                 console.print(f"[red]Error:[/red] {e}")
                 time.sleep(refresh)
                 continue
-            
+
             # Build display
             if not approvals:
                 table = Table(box=box.ROUNDED)
@@ -239,11 +224,11 @@ def watch(
                 table.add_column("Tool")
                 table.add_column("Risk", justify="right")
                 table.add_column("Action Required")
-                
+
                 for approval in approvals:
                     risk = approval.get("risk_score", 0)
                     risk_style = _risk_style(risk)
-                    
+
                     # Auto-approve low risk if enabled
                     if auto_approve and risk < 30:
                         _auto_approve(approval["id"])
@@ -253,23 +238,23 @@ def watch(
                             action = "[red]MFA required[/red]"
                         else:
                             action = "[yellow]Review needed[/yellow]"
-                    
+
                     table.add_row(
                         approval["id"][:8],
                         approval.get("tool_name", "unknown")[:30],
                         f"[{risk_style}]{risk}[/{risk_style}]",
-                        action
+                        action,
                     )
-                
+
                 console.print(table)
-            
+
             # Show controls
             console.print("\n[dim]Commands: approve <id> | reject <id> | inspect <id> | quit[/dim]")
-            
+
             # Simple input handling (would be more sophisticated in real implementation)
             time.sleep(refresh)
             console.clear()
-    
+
     except KeyboardInterrupt:
         console.print("\n[dim]Stopped watching[/dim]")
 
@@ -287,10 +272,11 @@ def _risk_style(score: int) -> str:
 def _time_since(iso_timestamp: str) -> str:
     """Convert ISO timestamp to human-readable time since"""
     from datetime import datetime
+
     try:
         dt = datetime.fromisoformat(iso_timestamp.replace("Z", "+00:00"))
         delta = datetime.now(dt.tzinfo) - dt
-        
+
         if delta.days > 0:
             return f"{delta.days}d ago"
         elif delta.seconds > 3600:
@@ -307,10 +293,7 @@ def _auto_approve(approval_id: str) -> None:
     """Auto-approve a low-risk request"""
     try:
         with get_api_client() as client:
-            payload = {
-                "decision": "approved",
-                "comment": "Auto-approved (low risk)"
-            }
+            payload = {"decision": "approved", "comment": "Auto-approved (low risk)"}
             client.post(f"/v1/mcp/approvals/{approval_id}/decision", json=payload)
     except:
         pass

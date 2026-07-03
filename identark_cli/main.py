@@ -5,7 +5,6 @@ IdentArk CLI - Main entry point
 
 from __future__ import annotations
 
-import sys
 from typing import Optional
 
 import typer
@@ -14,7 +13,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from identark_cli import __version__
-from identark_cli.commands import auth, agent, credential, approvals, mcp, config
+from identark_cli.commands import agent, approvals, auth, config, credential, mcp
 
 # Rich console for pretty output
 console = Console()
@@ -47,18 +46,18 @@ def main(
 ) -> None:
     """
     IdentArk CLI - Secure AI agent credential management
-    
+
     Run agents with isolated credentials, manage secrets, and approve
     high-risk operations from your terminal.
-    
+
     [bold]Quick start:[/bold]
-    
+
     $ identark auth login              # Authenticate with IdentArk
-    
+
     $ identark agent init              # Initialize agent project
-    
+
     $ identark credential scan         # Scan for secrets in code
-    
+
     $ identark agent run ./my_agent.py # Run with isolated credentials
     """
     if version:
@@ -68,21 +67,17 @@ def main(
 
 @app.command()
 def init(
-    path: Optional[str] = typer.Option(
-        ".", "--path", "-p", help="Path to initialize"
-    ),
-    force: bool = typer.Option(
-        False, "--force", "-f", help="Overwrite existing configuration"
-    ),
+    path: Optional[str] = typer.Option(".", "--path", "-p", help="Path to initialize"),
+    force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing configuration"),
 ) -> None:
     """
     Initialize IdentArk in the current directory
-    
+
     Creates .identark/config.toml and sets up the project for
     credential isolation.
     """
     from identark_cli.core.init import initialize_project
-    
+
     try:
         initialize_project(path, force=force)
         console.print(f"✓ Initialized IdentArk in [bold]{path}[/bold]")
@@ -99,20 +94,22 @@ def init(
 def status() -> None:
     """
     Show IdentArk status and configuration
-    
+
     Displays current authentication status, configured credentials,
     and active sessions.
     """
-    from identark_cli.core.config import load_config
     from identark_cli.core.auth import get_auth_status
-    
+    from identark_cli.core.config import load_config
+
     # Title
     console.print()
-    console.print(Panel.fit(
-        Text("IdentArk CLI", style="bold cyan") + Text(f" v{__version__}", style="dim"),
-        border_style="cyan"
-    ))
-    
+    console.print(
+        Panel.fit(
+            Text("IdentArk CLI", style="bold cyan") + Text(f" v{__version__}", style="dim"),
+            border_style="cyan",
+        )
+    )
+
     # Auth status
     auth_status = get_auth_status()
     console.print("\n[bold]Authentication:[/bold]")
@@ -122,7 +119,7 @@ def status() -> None:
     else:
         console.print("  ✗ Not authenticated")
         console.print("    Run: [cyan]identark auth login[/cyan]")
-    
+
     # Config
     try:
         config = load_config()
@@ -133,7 +130,7 @@ def status() -> None:
         console.print("\n[bold]Configuration:[/bold]")
         console.print("  No project configured")
         console.print("    Run: [cyan]identark init[/cyan]")
-    
+
     console.print()
 
 
