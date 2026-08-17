@@ -11,10 +11,18 @@ from typing import Optional
 import toml
 from pydantic import BaseModel, Field
 
+from identark_cli.core import secrets as secret_store
+
 # Default config locations
 CONFIG_DIR = Path.home() / ".identark"
 GLOBAL_CONFIG_FILE = CONFIG_DIR / "config.toml"
-PROJECT_CONFIG_FILE = ".identark" / "config.toml"
+# NB: must be a Path. `".identark" / "config.toml"` is str/str and raises
+# TypeError at import time, which took the whole CLI down.
+PROJECT_CONFIG_FILE = Path(".identark") / "config.toml"
+
+# Fields that are credentials, not configuration. These never touch
+# config.toml; they live in the OS keychain (see core/secrets.py).
+_SECRET_FIELDS = (secret_store.ACCESS_TOKEN, secret_store.REFRESH_TOKEN)
 
 
 class CredentialRef(BaseModel):
@@ -48,14 +56,19 @@ class ProjectConfig(BaseModel):
 
 
 class GlobalConfig(BaseModel):
-    """Global IdentArk configuration"""
+    """Global IdentArk configuration.
+
+    `access_token` and `refresh_token` are held in memory here for convenience,
+    but they are persisted to the OS keychain - never to config.toml. See
+    core/secrets.py.
+    """
 
     version: str = "1"
 
     # API settings
     api_url: str = "https://api.identark.io"
 
-    # Auth
+    # Auth - persisted via the secret store, not this file
     access_token: Optional[str] = None
     refresh_token: Optional[str] = None
     user_email: Optional[str] = None
@@ -120,7 +133,12 @@ def save_config(config: ProjectConfig, path: Optional[Path] = None) -> None:
 
 
 def load_global_config() -> GlobalConfig:
-    """Load global configuration"""
+    """Load global configuration.
+
+    Tokens are read from the OS keychain. If a legacy config.toml still carries
+    plaintext tokens (CLI <= 0.1.0), they are migrated into the keychain and
+    stripped from the file on this read.
+    """
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
     if not GLOBAL_CONFIG_FILE.exists():
@@ -131,17 +149,39 @@ def load_global_config() -> GlobalConfig:
     with open(GLOBAL_CONFIG_FILE) as f:
         data = toml.load(f)
 
-    return GlobalConfig(**data)
+    # Upgrade path: pull any plaintext tokens out of config.toml.
+    migrated = secret_store.migrate_plaintext_tokens(data)
+
+    config = GlobalConfig(**data)
+
+    # Authoritative source for tokens is the secret store.
+    config.access_token = secret_store.get_secret(secret_store.ACCESS_TOKEN)
+    config.refresh_token = secret_store.get_secret(secret_store.REFRESH_TOKEN)
+
+    if migrated:
+        # Rewrite now so the plaintext copy does not survive this run.
+        save_global_config(config)
+
+    return config
 
 
 def save_global_config(config: GlobalConfig) -> None:
-    """Save global configuration"""
+    """Save global configuration.
+
+    Tokens are routed to the secret store; everything else goes to config.toml.
+    """
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
-    with open(GLOBAL_CONFIG_FILE, "w") as f:
-        toml.dump(config.model_dump(), f)
+    data = config.model_dump()
 
-    # Secure permissions
+    # Route credentials to the keychain and keep them out of the file entirely.
+    for field in _SECRET_FIELDS:
+        secret_store.set_secret(field, data.pop(field, None))
+
+    with open(GLOBAL_CONFIG_FILE, "w") as f:
+        toml.dump(data, f)
+
+    # Secure permissions (config.toml still carries email / org id)
     os.chmod(GLOBAL_CONFIG_FILE, 0o600)
 
 

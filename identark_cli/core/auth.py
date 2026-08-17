@@ -11,11 +11,11 @@ import httpx
 import jwt
 from rich.console import Console
 
+from identark_cli.core import secrets as secret_store
 from identark_cli.core.config import GlobalConfig, load_global_config, save_global_config
 
 console = Console()
 
-KEYRING_SERVICE = "identark-cli"
 FIREBASE_AUTH_BASE = "https://identitytoolkit.googleapis.com/v1"
 
 
@@ -91,6 +91,9 @@ def logout() -> None:
     config.user_id = None
 
     save_global_config(config)
+
+    # Belt and braces: drop anything left in the keychain or file fallback.
+    secret_store.clear_all()
 
     console.print("✓ Logged out")
 

@@ -13,14 +13,21 @@ IdentArk CLI enables developers to:
 
 ## Installation
 
+> **Status: not yet published.** `identark-cli` is not on PyPI and the Homebrew
+> tap does not exist yet. Install from source until the first release lands.
+
 ```bash
-pip install identark-cli
+# From a checkout of this repo
+cd cloud/cli
+pip install -e .
+identark --version
 ```
 
-Or install with Homebrew:
+Planned once published:
 
 ```bash
-brew install identark/tap/identark
+pip install identark-cli          # not available yet
+brew install identark/tap/identark  # not available yet
 ```
 
 ## Quick Start
@@ -169,7 +176,7 @@ required = true
 
 ```toml
 version = "1"
-api_url = "https://identark-cloud.fly.dev"
+api_url = "https://api.identark.io"
 auto_approve_threshold = 30  # Auto-approve below this risk score
 ```
 
