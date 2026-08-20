@@ -4,6 +4,9 @@ Configuration management commands
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -11,6 +14,7 @@ from rich.table import Table
 from identark_cli.core.config import (
     GLOBAL_CONFIG_FILE,
     PROJECT_CONFIG_FILE,
+    get_project_root,
     load_config,
     load_global_config,
     save_config,
@@ -19,6 +23,15 @@ from identark_cli.core.config import (
 
 console = Console()
 app = typer.Typer(help="Configuration management")
+
+_GLOBAL_EDITABLE_KEYS = {"api_url", "color_output", "default_org_id"}
+_PROJECT_EDITABLE_KEYS = {
+    "default_agent_template",
+    "enable_git_hooks",
+    "organization_id",
+    "project_name",
+    "scan_on_commit",
+}
 
 
 @app.command("show")
@@ -32,7 +45,7 @@ def show_config(
     or global settings.
     """
     if global_config:
-        config = load_global_config()
+        global_values = load_global_config()
         console.print("[bold]Global Configuration[/bold]\n")
         console.print(f"Config file: [dim]{GLOBAL_CONFIG_FILE}[/dim]\n")
 
@@ -40,34 +53,35 @@ def show_config(
         table.add_column("Setting", style="cyan")
         table.add_column("Value")
 
-        table.add_row("API URL", config.api_url)
-        table.add_row("Authenticated", str(config.is_authenticated))
-        table.add_row("User Email", config.user_email or "-")
-        table.add_row("Default Org", config.default_org_id or "-")
-        table.add_row("Auto-approve Threshold", str(config.auto_approve_threshold))
+        table.add_row("API URL", global_values.api_url)
+        table.add_row("Authenticated", str(global_values.is_authenticated))
+        table.add_row("User Email", global_values.user_email or "-")
+        table.add_row("Default Org", global_values.default_org_id or "-")
 
         console.print(table)
     else:
         try:
-            config = load_config()
+            project_values = load_config()
             console.print("[bold]Project Configuration[/bold]\n")
-            console.print(f"Config file: [dim]{PROJECT_CONFIG_FILE}[/dim]\n")
+            console.print(f"Config file: [dim]{_project_config_path()}[/dim]\n")
 
             table = Table()
             table.add_column("Setting", style="cyan")
             table.add_column("Value")
 
-            table.add_row("Project Name", config.project_name or "-")
-            table.add_row("Organization ID", config.organization_id or "-")
-            table.add_row("Credentials", str(len(config.credentials)))
-            table.add_row("Git Hooks", "Enabled" if config.enable_git_hooks else "Disabled")
-            table.add_row("Scan on Commit", "Enabled" if config.scan_on_commit else "Disabled")
+            table.add_row("Project Name", project_values.project_name or "-")
+            table.add_row("Organization ID", project_values.organization_id or "-")
+            table.add_row("Credentials", str(len(project_values.credentials)))
+            table.add_row("Git Hooks", "Enabled" if project_values.enable_git_hooks else "Disabled")
+            table.add_row(
+                "Scan on Commit", "Enabled" if project_values.scan_on_commit else "Disabled"
+            )
 
             console.print(table)
 
-            if config.credentials:
+            if project_values.credentials:
                 console.print("\n[bold]Credentials:[/bold]")
-                for cred in config.credentials:
+                for cred in project_values.credentials:
                     console.print(f"  • [cyan]{cred.name}[/cyan]: {cred.ref}")
 
         except Exception:
@@ -88,43 +102,28 @@ def set_config(
 
     Examples:
         identark config set project_name "My Agent"
-        identark config set --global auto_approve_threshold 40
+        identark config set --global api_url https://api.identark.io
     """
-    if global_config:
-        config = load_global_config()
-
-        # Handle nested keys
-        if "." in key:
-            section, prop = key.split(".", 1)
-            if hasattr(config, section):
-                section_obj = getattr(config, section)
-                if hasattr(section_obj, prop):
-                    setattr(section_obj, prop, _convert_value(value))
-                else:
-                    console.print(f"[red]Unknown config key: {key}[/red]")
-                    return
+    try:
+        if global_config:
+            if key not in _GLOBAL_EDITABLE_KEYS:
+                raise ValueError(f"Unknown or protected global config key: {key}")
+            global_values = load_global_config()
+            setattr(global_values, key, _convert_value(value))
+            save_global_config(global_values)
+            scope = "global"
         else:
-            if hasattr(config, key):
-                setattr(config, key, _convert_value(value))
-            else:
-                console.print(f"[red]Unknown config key: {key}[/red]")
-                return
+            if key not in _PROJECT_EDITABLE_KEYS:
+                raise ValueError(f"Unknown or protected project config key: {key}")
+            project_values = load_config()
+            setattr(project_values, key, _convert_value(value))
+            save_config(project_values)
+            scope = "project"
+    except Exception as exc:
+        console.print(f"[red]Could not update config:[/red] {exc}")
+        raise typer.Exit(2) from None
 
-        save_global_config(config)
-        console.print(f"[green]✓ Updated global config:[/green] {key} = {value}")
-    else:
-        try:
-            config = load_config()
-        except Exception:
-            console.print("[red]No project found. Run 'identark init' first.[/red]")
-            return
-
-        if hasattr(config, key):
-            setattr(config, key, _convert_value(value))
-            save_config(config)
-            console.print(f"[green]✓ Updated project config:[/green] {key} = {value}")
-        else:
-            console.print(f"[red]Unknown config key: {key}[/red]")
+    console.print(f"[green]✓ Updated {scope} config:[/green] {key} = {value}")
 
 
 @app.command("get")
@@ -137,20 +136,20 @@ def get_config(
 
     Retrieves a specific configuration value.
     """
-    if global_config:
-        config = load_global_config()
-    else:
-        try:
-            config = load_config()
-        except Exception as e:
-            console.print(f"[red]Error:[/red] {e}")
-            return
+    try:
+        if global_config:
+            if key not in _GLOBAL_EDITABLE_KEYS | {"user_email", "user_id"}:
+                raise ValueError(f"Unknown or protected global config key: {key}")
+            value = getattr(load_global_config(), key)
+        else:
+            if key not in _PROJECT_EDITABLE_KEYS | {"version"}:
+                raise ValueError(f"Unknown or protected project config key: {key}")
+            value = getattr(load_config(), key)
+    except Exception as exc:
+        console.print(f"[red]Could not read config:[/red] {exc}")
+        raise typer.Exit(2) from None
 
-    if hasattr(config, key):
-        value = getattr(config, key)
-        console.print(value)
-    else:
-        console.print(f"[red]Unknown config key: {key}[/red]")
+    console.print(value)
 
 
 @app.command("edit")
@@ -168,7 +167,11 @@ def edit_config(
     if global_config:
         config_file = GLOBAL_CONFIG_FILE
     else:
-        config_file = PROJECT_CONFIG_FILE
+        try:
+            config_file = _project_config_path()
+        except Exception as exc:
+            console.print(f"[red]Could not find project config:[/red] {exc}")
+            raise typer.Exit(1) from None
 
     editor = os.environ.get("EDITOR", "vim")
 
@@ -177,9 +180,17 @@ def edit_config(
         console.print(f"[green]✓ Edited {config_file}[/green]")
     except Exception as e:
         console.print(f"[red]Could not open editor:[/red] {e}")
+        raise typer.Exit(1) from None
 
 
-def _convert_value(value: str):
+def _project_config_path() -> Path:
+    root = get_project_root()
+    if root is None:
+        raise ValueError("No IdentArk project found. Run 'identark init' first.")
+    return root / PROJECT_CONFIG_FILE
+
+
+def _convert_value(value: str) -> Any:
     """Convert string value to appropriate type"""
     # Try bool
     if value.lower() in ("true", "yes", "1"):

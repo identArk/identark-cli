@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -17,7 +16,7 @@ from identark_cli.core.auth import get_api_client
 from identark_cli.core.config import CredentialRef, load_config, save_config
 
 console = Console()
-app = typer.Typer(help="Credential management")
+app = typer.Typer(help="Credential references, scanning, and local injection")
 
 
 @app.command("list")
@@ -31,14 +30,14 @@ def list_credentials() -> None:
         config = load_config()
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     if not config.credentials:
         console.print("No credentials configured")
         console.print("Run: [cyan]identark credential add <name>[/cyan]")
         return
 
-    table = Table(title="Configured Credentials")
+    table = Table(title="Project Credential References")
     table.add_column("Name", style="cyan")
     table.add_column("Reference")
     table.add_column("Required")
@@ -53,10 +52,10 @@ def list_credentials() -> None:
 @app.command()
 def add(
     name: str = typer.Argument(..., help="Credential name"),
-    ref: Optional[str] = typer.Option(
+    ref: str | None = typer.Option(
         None, "--ref", "-r", help="Vault reference (e.g., vault://prod/openai)"
     ),
-    description: Optional[str] = typer.Option(None, "--description", "-d", help="Description"),
+    description: str | None = typer.Option(None, "--description", "-d", help="Description"),
     required: bool = typer.Option(
         True, "--required/--optional", help="Whether credential is required"
     ),
@@ -76,14 +75,17 @@ def add(
         config = load_config()
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     # Determine reference
+    if env and ref:
+        console.print("[red]Provide exactly one of --ref or --env.[/red]")
+        raise typer.Exit(2)
     if env:
         ref = f"env://{name}"
     elif not ref:
-        # Interactive selection from vault
-        ref = _select_from_vault()
+        console.print("[red]Provide exactly one of --ref or --env.[/red]")
+        raise typer.Exit(2)
 
     # Check if already exists
     for existing in config.credentials:
@@ -96,7 +98,16 @@ def add(
             break
 
     # Add new credential
-    credential = CredentialRef(name=name, ref=ref, required=required, description=description)
+    try:
+        credential = CredentialRef(
+            name=name,
+            ref=ref,
+            required=required,
+            description=description,
+        )
+    except ValueError as exc:
+        console.print(f"[red]Invalid credential reference:[/red] {exc}")
+        raise typer.Exit(2) from None
     config.credentials.append(credential)
     save_config(config)
 
@@ -118,7 +129,7 @@ def remove(
         config = load_config()
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     # Find credential
     for cred in config.credentials:
@@ -141,7 +152,6 @@ def remove(
 @app.command()
 def scan(
     path: Path = typer.Option(".", "--path", "-p", help="Path to scan"),
-    fix: bool = typer.Option(False, "--fix", help="Attempt to fix found secrets"),
     strict: bool = typer.Option(False, "--strict", help="Exit with error if secrets found"),
 ) -> None:
     """
@@ -177,20 +187,35 @@ def scan(
 
     console.print(table)
 
-    if fix:
-        console.print("\n[yellow]Auto-fix not yet implemented[/yellow]")
-        console.print("Manual fix required for each finding")
-
     if strict:
         raise typer.Exit(1)
+
+
+@app.command("install-hook")
+def install_hook() -> None:
+    """Install a fail-closed IdentArk pre-commit secret scan hook."""
+    from identark_cli.core.config import get_project_root
+    from identark_cli.core.scanner import install_git_hook
+
+    root = get_project_root()
+    if root is None:
+        console.print("[red]No IdentArk project found. Run 'identark init' first.[/red]")
+        raise typer.Exit(1)
+    try:
+        install_git_hook(root)
+    except Exception as exc:
+        console.print(f"[red]Could not install hook:[/red] {exc}")
+        raise typer.Exit(1) from None
+
+    config = load_config()
+    config.enable_git_hooks = True
+    save_config(config)
+    console.print("[green]✓ Installed fail-closed pre-commit secret scanner[/green]")
 
 
 @app.command()
 def inject(
     command: list[str] = typer.Argument(..., help="Command to run with injected credentials"),
-    env_file: Optional[Path] = typer.Option(
-        None, "--env-file", help="Write credentials to env file"
-    ),
 ) -> None:
     """
     Inject credentials into a process
@@ -200,7 +225,9 @@ def inject(
 
     Examples:
         identark credential inject -- python my_script.py
-        identark credential inject --env-file .env -- npm start
+
+    IdentArk deliberately does not write resolved credentials to env files.
+    They exist only in this process and the child process for its lifetime.
     """
     import subprocess
 
@@ -208,7 +235,7 @@ def inject(
         config = load_config()
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     # Fetch credentials from vault
     env_vars = os.environ.copy()
@@ -223,17 +250,8 @@ def inject(
                     console.print(
                         f"[red]Failed to fetch required credential {cred.name}:[/red] {e}"
                     )
-                    raise typer.Exit(1)
+                    raise typer.Exit(1) from None
                 console.print(f"[yellow]Warning:[/yellow] Could not fetch {cred.name}")
-
-    # Write to env file if requested
-    if env_file:
-        with open(env_file, "w") as f:
-            for cred in config.credentials:
-                if cred.name in env_vars:
-                    f.write(f"{cred.name}={env_vars[cred.name]}\n")
-        console.print(f"✓ Wrote credentials to [cyan]{env_file}[/cyan]")
-        return
 
     # Run command with injected environment
     console.print(f"Running: [cyan]{' '.join(command)}[/cyan]")
@@ -241,14 +259,6 @@ def inject(
 
     result = subprocess.run(command, env=env_vars)
     raise typer.Exit(result.returncode)
-
-
-def _select_from_vault() -> str:
-    """Interactive selection of credential from vault"""
-    # TODO: Implement vault credential listing
-    console.print("Enter vault reference manually:")
-    ref = typer.prompt("Reference (e.g., vault://prod/openai)")
-    return ref
 
 
 def _fetch_credential_value(ref: str) -> str:
@@ -266,9 +276,17 @@ def _fetch_credential_value(ref: str) -> str:
         path = ref[8:]  # Remove vault:// prefix
 
         with get_api_client() as client:
-            response = client.get(f"/v1/credentials/resolve?path={path}")
+            response = client.get("/v1/credentials/resolve", params={"path": path})
             response.raise_for_status()
             data = response.json()
-            return data["value"]
+            if data.get("fields") is not None:
+                raise ValueError(
+                    "Structured credentials cannot be injected into an environment variable. "
+                    "Use an IdentArk managed connector instead."
+                )
+            value = data.get("value")
+            if not isinstance(value, str) or not value:
+                raise ValueError("IdentArk returned an empty credential value")
+            return value
 
     raise ValueError(f"Unknown credential reference format: {ref}")

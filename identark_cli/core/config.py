@@ -5,11 +5,13 @@ Configuration management for IdentArk CLI
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
-from typing import Optional
+from typing import Any
+from urllib.parse import urlparse
 
 import toml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from identark_cli.core import secrets as secret_store
 
@@ -28,31 +30,55 @@ _SECRET_FIELDS = (secret_store.ACCESS_TOKEN, secret_store.REFRESH_TOKEN)
 class CredentialRef(BaseModel):
     """Reference to a credential in IdentArk vault"""
 
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
     name: str
     ref: str  # vault://prod/openai, env://OPENAI_API_KEY, etc.
     required: bool = True
-    description: Optional[str] = None
+    description: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_environment_name(cls, value: str) -> str:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+            raise ValueError("Credential name must be a valid environment variable name")
+        return value
+
+    @field_validator("ref")
+    @classmethod
+    def validate_reference(cls, value: str) -> str:
+        if not value.startswith(("vault://", "env://")):
+            raise ValueError("Credential reference must start with vault:// or env://")
+        if value in {"vault://", "env://"}:
+            raise ValueError("Credential reference is missing a target")
+        if value.startswith("env://") and not re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*", value.removeprefix("env://")
+        ):
+            raise ValueError("env:// target must be a valid environment variable name")
+        return value
 
 
 class ProjectConfig(BaseModel):
     """Project-level IdentArk configuration"""
 
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
     version: str = "1"
-    project_name: Optional[str] = None
-    organization_id: Optional[str] = None
+    project_name: str | None = None
+    organization_id: str | None = None
 
     # Credential references
     credentials: list[CredentialRef] = Field(default_factory=list)
 
     # Agent settings
-    default_agent_template: Optional[str] = None
+    default_agent_template: str | None = None
 
     # Security settings
-    enable_git_hooks: bool = True
+    enable_git_hooks: bool = False
     scan_on_commit: bool = True
 
     # MCP settings
-    mcp_servers: list[dict] = Field(default_factory=list)
+    mcp_servers: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class GlobalConfig(BaseModel):
@@ -63,20 +89,31 @@ class GlobalConfig(BaseModel):
     core/secrets.py.
     """
 
+    model_config = ConfigDict(extra="ignore", validate_assignment=True)
+
     version: str = "1"
 
     # API settings
     api_url: str = "https://api.identark.io"
 
+    @field_validator("api_url")
+    @classmethod
+    def validate_api_url(cls, value: str) -> str:
+        normalized = value.rstrip("/")
+        parsed = urlparse(normalized)
+        local_http = parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1"}
+        if not parsed.hostname or (parsed.scheme != "https" and not local_http):
+            raise ValueError("API URL must use HTTPS (HTTP is allowed only for localhost)")
+        return normalized
+
     # Auth - persisted via the secret store, not this file
-    access_token: Optional[str] = None
-    refresh_token: Optional[str] = None
-    user_email: Optional[str] = None
-    user_id: Optional[str] = None
+    access_token: str | None = None
+    refresh_token: str | None = None
+    user_email: str | None = None
+    user_id: str | None = None
 
     # Preferences
-    default_org_id: Optional[str] = None
-    auto_approve_threshold: int = 30  # Auto-approve below this risk score
+    default_org_id: str | None = None
 
     # UI
     color_output: bool = True
@@ -86,7 +123,7 @@ class GlobalConfig(BaseModel):
         return self.access_token is not None
 
 
-def get_project_root(path: Optional[Path] = None) -> Optional[Path]:
+def get_project_root(path: Path | None = None) -> Path | None:
     """Find the project root by looking for .identark/config.toml"""
     if path is None:
         path = Path.cwd()
@@ -102,7 +139,7 @@ def get_project_root(path: Optional[Path] = None) -> Optional[Path]:
     return None
 
 
-def load_config(path: Optional[Path] = None) -> ProjectConfig:
+def load_config(path: Path | None = None) -> ProjectConfig:
     """Load project configuration"""
     if path is None:
         root = get_project_root()
@@ -115,20 +152,21 @@ def load_config(path: Optional[Path] = None) -> ProjectConfig:
     if not path.exists():
         raise ConfigError(f"Configuration not found: {path}")
 
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         data = toml.load(f)
 
     return ProjectConfig(**data)
 
 
-def save_config(config: ProjectConfig, path: Optional[Path] = None) -> None:
+def save_config(config: ProjectConfig, path: Path | None = None) -> None:
     """Save project configuration"""
     if path is None:
-        path = Path(PROJECT_CONFIG_FILE)
+        root = get_project_root()
+        path = (root / PROJECT_CONFIG_FILE) if root else Path(PROJECT_CONFIG_FILE)
 
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         toml.dump(config.model_dump(), f)
 
 
@@ -146,7 +184,7 @@ def load_global_config() -> GlobalConfig:
         save_global_config(config)
         return config
 
-    with open(GLOBAL_CONFIG_FILE) as f:
+    with open(GLOBAL_CONFIG_FILE, encoding="utf-8") as f:
         data = toml.load(f)
 
     # Upgrade path: pull any plaintext tokens out of config.toml.
@@ -178,7 +216,7 @@ def save_global_config(config: GlobalConfig) -> None:
     for field in _SECRET_FIELDS:
         secret_store.set_secret(field, data.pop(field, None))
 
-    with open(GLOBAL_CONFIG_FILE, "w") as f:
+    with open(GLOBAL_CONFIG_FILE, "w", encoding="utf-8") as f:
         toml.dump(data, f)
 
     # Secure permissions (config.toml still carries email / org id)
@@ -192,7 +230,7 @@ class ConfigError(Exception):
 
 
 # Backwards compatibility with older config formats
-def migrate_config(data: dict) -> dict:
+def migrate_config(data: dict[str, Any]) -> dict[str, Any]:
     """Migrate old config formats to current version"""
     version = data.get("version", "1")
 

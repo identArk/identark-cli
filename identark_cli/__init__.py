@@ -1,8 +1,8 @@
 """
-IdentArk CLI - AI agent credential isolation
+IdentArk CLI - managed access for AI agents
 
-The official CLI for IdentArk - manage credentials, run agents with isolation,
-and approve high-risk operations from your terminal.
+The official CLI for IdentArk - manage credential references, run local
+development processes, and approve high-risk operations from your terminal.
 """
 
 __version__ = "0.1.0"

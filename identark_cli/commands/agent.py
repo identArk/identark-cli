@@ -7,8 +7,8 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from enum import StrEnum
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -19,25 +19,33 @@ from identark_cli.core.auth import get_api_client
 from identark_cli.core.config import ProjectConfig, load_config, save_config
 
 console = Console()
-app = typer.Typer(help="Agent development and execution")
+app = typer.Typer(help="Agent scaffolding, registration, and local execution")
+
+
+class AgentTemplate(StrEnum):
+    BASIC = "basic"
+    SLACK_BOT = "slack-bot"
+    API_SERVICE = "api-service"
 
 
 @app.command()
 def init(
     name: str = typer.Option(..., "--name", "-n", help="Agent name"),
-    template: str = typer.Option("basic", "--template", "-t", help="Agent template"),
+    template: AgentTemplate = typer.Option(
+        AgentTemplate.BASIC, "--template", "-t", help="Agent template"
+    ),
     path: Path = typer.Option(".", "--path", "-p", help="Project path"),
 ) -> None:
     """
     Initialize a new agent project
 
-    Creates agent configuration, sample code, and sets up
-    credential isolation.
+    Creates local agent configuration and sample code. Register the agent
+    separately when it is ready to use the IdentArk control plane.
 
     Templates:
         basic       - Minimal agent structure
         slack-bot   - Slack bot with IdentArk integration
-        api-service - FastAPI service with isolated credentials
+        api-service - FastAPI service with local credential injection
     """
     project_path = Path(path) / name
 
@@ -51,45 +59,85 @@ def init(
     (project_path / ".identark").mkdir()
 
     # Create config
-    config = ProjectConfig(project_name=name, default_agent_template=template)
+    config = ProjectConfig(project_name=name, default_agent_template=template.value)
     save_config(config, project_path / ".identark" / "config.toml")
 
     # Create sample files based on template
     if template == "slack-bot":
         _create_slack_bot_template(project_path, name)
+        example_credential = "SLACK_TOKEN"
     elif template == "api-service":
         _create_api_service_template(project_path, name)
+        example_credential = "DATABASE_URL"
     else:
         _create_basic_template(project_path, name)
+        example_credential = "API_KEY"
 
     console.print(
         Panel.fit(
             f"[green]✓ Created agent project: {name}[/green]\n"
             f"\n[bold]Next steps:[/bold]"
             f"\n  cd {project_path}"
-            f"\n  identark credential add SLACK_TOKEN --ref vault://prod/slack"
+            f"\n  identark credential add {example_credential} --ref vault://prod/{example_credential.lower()}"
             f"\n  identark agent run"
         )
     )
 
 
 @app.command()
+def register(
+    name: str = typer.Option(..., "--name", "-n", help="Agent name"),
+    credential_ref: str = typer.Option(
+        ..., "--credential-ref", help="Vault path used by the agent's LLM provider"
+    ),
+    provider: str = typer.Option("openai", "--provider", help="Default LLM provider"),
+    model: str = typer.Option("gpt-4o", "--model", help="Default LLM model"),
+    description: str | None = typer.Option(None, "--description", help="Agent description"),
+) -> None:
+    """Register an agent with the IdentArk control plane."""
+    if not credential_ref.startswith("vault://") or credential_ref == "vault://":
+        console.print("[red]--credential-ref must be a non-empty vault:// reference[/red]")
+        raise typer.Exit(2)
+
+    payload = {
+        "name": name,
+        "credential_ref": credential_ref,
+        "provider": provider,
+        "model": model,
+        "description": description,
+    }
+    try:
+        with get_api_client() as client:
+            response = client.post("/v1/agents", json=payload)
+            response.raise_for_status()
+            registered = response.json()
+    except Exception as exc:
+        console.print(f"[red]Could not register agent:[/red] {exc}")
+        raise typer.Exit(1) from None
+
+    console.print(f"[green]✓ Registered agent[/green] [cyan]{registered['name']}[/cyan]")
+    console.print(f"  ID: {registered['id']}")
+    console.print(f"  Agent key: {registered['agent_key']}")
+
+
+@app.command()
 def run(
-    script: Optional[Path] = typer.Argument(None, help="Agent script to run"),
+    script: Path | None = typer.Argument(None, help="Agent script to run"),
     watch: bool = typer.Option(False, "--watch", "-w", help="Restart on file changes"),
     debug: bool = typer.Option(False, "--debug", "-d", help="Enable debug mode"),
 ) -> None:
     """
-    Run an agent with isolated credentials
+    Run a local agent with credential injection
 
     Injects credentials from IdentArk vault and runs the agent
-    with full isolation. High-risk operations trigger HITL prompts.
+    for the child process lifetime. The child process can read injected
+    environment variables; use managed connectors for production isolation.
     """
     try:
         config = load_config()
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     # Determine entry point
     if script:
@@ -98,15 +146,21 @@ def run(
         entry_point = Path("main.py")
     elif Path("app.py").exists():
         entry_point = Path("app.py")
+    elif Path("src/main.py").exists():
+        entry_point = Path("src/main.py")
     else:
         console.print("[red]No entry point found[/red]")
-        console.print("Specify a script or create main.py")
+        console.print("Specify a script or create main.py, app.py, or src/main.py")
+        raise typer.Exit(1)
+
+    if not entry_point.is_file():
+        console.print(f"[red]Entry point not found:[/red] {entry_point}")
         raise typer.Exit(1)
 
     # Fetch credentials
     env_vars = os.environ.copy()
 
-    console.print("[bold]Starting agent with IdentArk isolation[/bold]\n")
+    console.print("[bold]Starting agent with IdentArk credential injection[/bold]\n")
 
     with console.status("Fetching credentials from vault..."):
         for cred in config.credentials:
@@ -117,7 +171,7 @@ def run(
             except Exception as e:
                 if cred.required:
                     console.print(f"  [red]✗ {cred.name}:[/red] {e}")
-                    raise typer.Exit(1)
+                    raise typer.Exit(1) from None
                 console.print(f"  [yellow]⚠ {cred.name}:[/yellow] {e}")
 
     console.print()
@@ -143,10 +197,16 @@ def dev(
     console.print(
         Panel.fit(
             "[bold cyan]IdentArk Agent Development Mode[/bold cyan]\n"
-            "Local credential vault active\n"
-            "HITL prompts enabled for high-risk operations"
+            "Credential references resolved for this child process\n"
+            "Use managed connectors when the process must never receive a raw secret"
         )
     )
+
+    try:
+        config = load_config()
+    except Exception as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from None
 
     # Check for common frameworks
     if Path("main.py").exists():
@@ -155,105 +215,40 @@ def dev(
             cmd.append("--reload")
     elif Path("app.py").exists():
         cmd = [sys.executable, "app.py"]
+    elif Path("src/main.py").exists():
+        if config.default_agent_template == AgentTemplate.API_SERVICE:
+            cmd = [sys.executable, "-m", "uvicorn", "src.main:app", "--port", str(port)]
+            if reload:
+                cmd.append("--reload")
+        else:
+            cmd = [sys.executable, "src/main.py"]
     else:
-        console.print("[red]No main.py or app.py found[/red]")
+        console.print("[red]No main.py, app.py, or src/main.py found[/red]")
         raise typer.Exit(1)
 
     # Run with credentials injected
     from identark_cli.commands.credential import _fetch_credential_value
 
     try:
-        config = load_config()
         env_vars = os.environ.copy()
 
         for cred in config.credentials:
             try:
                 value = _fetch_credential_value(cred.ref)
                 env_vars[cred.name] = value
-            except:
-                pass  # Dev mode allows missing credentials
+            except Exception as exc:
+                if cred.required:
+                    console.print(f"[red]Required credential {cred.name} failed:[/red] {exc}")
+                    raise typer.Exit(1) from None
+                console.print(f"[yellow]Optional credential {cred.name} unavailable[/yellow]")
 
-        subprocess.run(cmd, env=env_vars)
+        result = subprocess.run(cmd, env=env_vars)
+        raise typer.Exit(result.returncode)
+    except typer.Exit:
+        raise
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(1)
-
-
-@app.command()
-def logs(
-    follow: bool = typer.Option(False, "--follow", "-f", help="Follow log output"),
-    lines: int = typer.Option(100, "--lines", "-n", help="Number of lines to show"),
-) -> None:
-    """
-    Show agent logs
-
-    Displays recent agent execution logs from IdentArk.
-    """
-    console.print("[dim]Agent logs (from IdentArk cloud)...[/dim]\n")
-
-    try:
-        with get_api_client() as client:
-            response = client.get(f"/v1/agents/logs?lines={lines}")
-            response.raise_for_status()
-            logs_data = response.json()
-
-            for log in logs_data.get("logs", []):
-                timestamp = log.get("timestamp", "")
-                level = log.get("level", "INFO")
-                message = log.get("message", "")
-
-                color = "white"
-                if level == "ERROR":
-                    color = "red"
-                elif level == "WARN":
-                    color = "yellow"
-
-                console.print(f"[{timestamp}] [{color}]{level}[/{color}] {message}")
-
-    except Exception as e:
-        console.print(f"[yellow]Could not fetch logs:[/yellow] {e}")
-        console.print("Logs are stored locally in .identark/logs/")
-
-
-@app.command()
-def inspect(
-    session_id: Optional[str] = typer.Argument(None, help="Session ID to inspect"),
-) -> None:
-    """
-    Inspect agent session details
-
-    Shows credential usage, HITL decisions, and audit trail
-    for a specific agent session.
-    """
-    if not session_id:
-        # List recent sessions
-        try:
-            with get_api_client() as client:
-                response = client.get("/v1/agents/sessions")
-                response.raise_for_status()
-                sessions = response.json()
-
-                table = Table(title="Recent Agent Sessions")
-                table.add_column("Session ID", style="cyan")
-                table.add_column("Started")
-                table.add_column("Status")
-                table.add_column("Actions")
-
-                for session in sessions:
-                    table.add_row(
-                        session["id"],
-                        session["started_at"],
-                        session["status"],
-                        str(session.get("action_count", 0)),
-                    )
-
-                console.print(table)
-        except Exception as e:
-            console.print(f"[red]Error:[/red] {e}")
-    else:
-        # Show session details
-        console.print(f"Session: [cyan]{session_id}[/cyan]")
-        console.print("[dim]Detailed session inspection coming soon...[/dim]")
+        raise typer.Exit(1) from None
 
 
 @app.command()
@@ -277,7 +272,7 @@ def list(
 
             if not agents:
                 console.print("[dim]No agents found.[/dim]")
-                console.print("  Register one with: [cyan]identark agent init[/cyan]")
+                console.print("  Register one with: [cyan]identark agent register --help[/cyan]")
                 return
 
             table = Table(title="IdentArk Agents")
@@ -306,6 +301,7 @@ def list(
 
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1) from None
 
 
 @app.command()
@@ -335,9 +331,11 @@ def delete(
             else:
                 console.print(f"[red]Error {response.status_code}:[/red] {response.text}")
                 raise typer.Exit(1)
+    except typer.Exit:
+        raise
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 def _create_basic_template(path: Path, name: str) -> None:
@@ -351,7 +349,7 @@ import os
 API_KEY = os.environ.get("API_KEY")
 
 def main():
-    print(f"Agent running with isolated credentials")
+    print("Agent running with injected development credentials")
     print(f"API_KEY loaded: {bool(API_KEY)}")
     # Your agent logic here
 
@@ -367,7 +365,7 @@ IdentArk Agent Project
 ## Development
 
 ```bash
-# Run with isolated credentials
+# Run with local development credential injection
 identark agent run
 
 # Or in dev mode with hot reload
@@ -401,7 +399,7 @@ def handle_message(event):
 
 if __name__ == "__main__":
     # Start bot
-    print("Slack bot running with isolated credentials")
+    print("Slack bot running with injected development credentials")
 '''
     (path / "src" / "main.py").write_text(main_py)
 
@@ -434,7 +432,7 @@ if __name__ == "__main__":
     (path / "requirements.txt").write_text(requirements)
 
 
-def _run_agent(entry_point: Path, env_vars: dict, debug: bool) -> None:
+def _run_agent(entry_point: Path, env_vars: dict[str, str], debug: bool) -> None:
     """Run the agent process"""
     cmd = [sys.executable, str(entry_point)]
 
@@ -445,26 +443,30 @@ def _run_agent(entry_point: Path, env_vars: dict, debug: bool) -> None:
     raise typer.Exit(result.returncode)
 
 
-def _run_with_watch(entry_point: Path, env_vars: dict, debug: bool) -> None:
+def _run_with_watch(entry_point: Path, env_vars: dict[str, str], debug: bool) -> None:
     """Run agent with file watching"""
     try:
-        from watchdog.events import FileSystemEventHandler
+        from watchdog.events import FileSystemEvent, FileSystemEventHandler
         from watchdog.observers import Observer
     except ImportError:
         console.print("[yellow]watchdog not installed. Install with:[/yellow]")
         console.print("  pip install watchdog")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
+
+    if debug:
+        env_vars["IDENTARK_DEBUG"] = "1"
 
     class ReloadHandler(FileSystemEventHandler):
-        def __init__(self):
-            self.process = None
+        def __init__(self) -> None:
+            self.process: subprocess.Popen[bytes] | None = None
 
-        def on_modified(self, event):
-            if event.src_path.endswith(".py"):
-                console.print(f"[dim]Detected change in {event.src_path}[/dim]")
+        def on_modified(self, event: FileSystemEvent) -> None:
+            source_path = os.fsdecode(event.src_path)
+            if source_path.endswith(".py"):
+                console.print(f"[dim]Detected change in {source_path}[/dim]")
                 self.restart()
 
-        def restart(self):
+        def restart(self) -> None:
             if self.process:
                 self.process.terminate()
                 self.process.wait()
@@ -485,6 +487,7 @@ def _run_with_watch(entry_point: Path, env_vars: dict, debug: bool) -> None:
         observer.stop()
         if handler.process:
             handler.process.terminate()
+            handler.process.wait()
 
     observer.join()
 

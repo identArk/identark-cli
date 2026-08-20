@@ -24,35 +24,50 @@ class SecretFinding:
 
 
 # Patterns for secret detection
+#
+# NOTE ON CHARACTER CLASSES
+# Value classes must include '-' and '_'. Until 2026-08-17 they did not, so
+# `api_key = "sk-..."` and `api_key = "ghp_..."` both slipped through: the class
+# stopped dead at the first hyphen. Almost every modern key format carries one,
+# which left the generic rules close to inert while the scanner still reported
+# "no secrets found" - a false pass, which is worse than no scanner at all
+# because install_git_hook() turns it into active assurance at commit time.
+#
+# Vendor-prefixed keys match on their prefix and do not depend on the assignment
+# shape, so they are caught in .env, YAML, JSON and prose alike.
 SECRET_PATTERNS = [
-    # API Keys
-    (r"api[_-]?key['\"]?\s*[:=]\s*['\"][a-zA-Z0-9]{16,}['\"]", "API Key", "high"),
-    (r"api[_-]?secret['\"]?\s*[:=]\s*['\"][a-zA-Z0-9]{16,}['\"]", "API Secret", "high"),
-    # AWS
-    (r"AKIA[0-9A-Z]{16}", "AWS Access Key ID", "high"),
+    # --- IdentArk's own credentials (previously not covered at all) ---
+    (r"\bcsk_[A-Za-z0-9_\-]{16,}", "IdentArk Control-Plane Key", "high"),
+    (r"\bik_(live|test)_[A-Za-z0-9_\-]{16,}", "IdentArk API Key", "high"),
+    # --- OpenAI ---
+    (r"\bsk-proj-[A-Za-z0-9_\-]{20,}", "OpenAI Project Key", "high"),
+    (r"\bsk-[A-Za-z0-9]{20,}T3BlbkFJ[A-Za-z0-9]{20,}", "OpenAI API Key", "high"),
+    (r"\bsk-[A-Za-z0-9]{48}\b", "OpenAI API Key (legacy)", "high"),
+    # --- Anthropic (real keys look like sk-ant-api03-..., so allow - and _) ---
+    (r"\bsk-ant-[A-Za-z0-9_\-]{24,}", "Anthropic API Key", "high"),
+    # --- Cloud / VCS / chat ---
+    (r"\bAKIA[0-9A-Z]{16}\b", "AWS Access Key ID", "high"),
     (
-        r"aws[_-]?secret[_-]?access[_-]?key['\"]?\s*[:=]\s*['\"][a-zA-Z0-9/+=]{40}['\"]",
+        r"aws[_-]?secret[_-]?access[_-]?key['\"]?\s*[:=]\s*['\"][A-Za-z0-9/+=]{40}['\"]",
         "AWS Secret Key",
         "high",
     ),
-    # GitHub
-    (r"ghp_[a-zA-Z0-9]{36}", "GitHub Personal Access Token", "high"),
-    (r"gho_[a-zA-Z0-9]{36}", "GitHub OAuth Token", "high"),
-    # Slack
-    (r"xox[baprs]-[0-9]{10,13}-[0-9]{10,13}[a-zA-Z0-9-]*", "Slack Token", "high"),
-    # OpenAI
-    (r"sk-[a-zA-Z0-9]{20,}T3BlbkFJ[a-zA-Z0-9]{20,}", "OpenAI API Key", "high"),
-    (r"sk-[a-zA-Z0-9]{48}", "OpenAI API Key (old format)", "high"),
-    # Anthropic
-    (r"sk-ant-[a-zA-Z0-9]{32,}", "Anthropic API Key", "high"),
-    # Generic high-entropy strings that look like secrets
+    (r"\bgh[pousr]_[A-Za-z0-9]{36,}", "GitHub Token", "high"),
+    (r"\bxox[baprs]-[0-9]{10,13}-[0-9]{10,13}[A-Za-z0-9-]*", "Slack Token", "high"),
+    (r"\bAIza[0-9A-Za-z_\-]{35}\b", "Google API Key", "high"),
+    # --- Generic assignment shapes ---
+    (r"api[_-]?key['\"]?\s*[:=]\s*['\"][A-Za-z0-9_\-]{16,}['\"]", "API Key", "high"),
+    (r"api[_-]?secret['\"]?\s*[:=]\s*['\"][A-Za-z0-9_\-]{16,}['\"]", "API Secret", "high"),
     (r"password['\"]?\s*[:=]\s*['\"][^'\"\s]{8,}['\"]", "Hardcoded Password", "medium"),
     (r"secret['\"]?\s*[:=]\s*['\"][^'\"\s]{8,}['\"]", "Hardcoded Secret", "medium"),
-    (r"token['\"]?\s*[:=]\s*['\"][a-zA-Z0-9_-]{20,}['\"]", "Token", "medium"),
-    # Private keys
-    (r"-----BEGIN (RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----", "Private Key", "high"),
-    # Database URLs with passwords
-    (r"(postgres|mysql|mongodb)://[^:]+:[^@]+@", "Database URL with Password", "high"),
+    (r"token['\"]?\s*[:=]\s*['\"][A-Za-z0-9_\-]{20,}['\"]", "Token", "medium"),
+    # --- Key material and connection strings ---
+    (r"-----BEGIN (RSA |DSA |EC |OPENSSH |PGP )?PRIVATE KEY-----", "Private Key", "high"),
+    (
+        r"(postgres|postgresql|mysql|mongodb)(\+srv)?://[^:@/\s]+:[^@/\s]+@",
+        "Database URL with Password",
+        "high",
+    ),
 ]
 
 # File patterns to scan
@@ -109,7 +124,7 @@ def scan_directory(path: Path, max_file_size: int = 1024 * 1024) -> list[SecretF
         try:
             if file_path.stat().st_size > max_file_size:
                 continue
-        except:
+        except OSError:
             continue
 
         # Scan file
@@ -122,14 +137,14 @@ def scan_directory(path: Path, max_file_size: int = 1024 * 1024) -> list[SecretF
 def scan_file(file_path: Path) -> Iterator[SecretFinding]:
     """Scan a single file for secrets"""
     # Skip binary files
-    if file_path.suffix not in SCAN_EXTENSIONS:
+    if file_path.suffix not in SCAN_EXTENSIONS and file_path.name not in SCAN_EXTENSIONS:
         return
 
     try:
         with open(file_path, encoding="utf-8", errors="ignore") as f:
             content = f.read()
             lines = content.split("\n")
-    except:
+    except OSError:
         return
 
     for line_num, line in enumerate(lines, start=1):
@@ -188,10 +203,13 @@ def _is_likely_false_positive(line: str) -> bool:
     return False
 
 
-def _mask_secret(line: str, match: re.Match) -> str:
+def _mask_secret(line: str, match: re.Match[str]) -> str:
     """Mask the secret portion of a line for display"""
-    start, end = match.span()
-    secret = line[start:end]
+    secret = match.group(0)
+    start = line.find(secret)
+    if start == -1:
+        return line
+    end = start + len(secret)
 
     # Mask most of the secret
     if len(secret) > 8:
@@ -212,25 +230,35 @@ def install_git_hook(project_path: Path) -> None:
     hook_path = project_path / ".git" / "hooks" / "pre-commit"
 
     if not hook_path.parent.exists():
-        # Not a git repo
-        return
+        raise HookInstallError(f"Not a git repository: {project_path}")
+
+    if hook_path.exists():
+        existing = hook_path.read_text(encoding="utf-8", errors="ignore")
+        if "IdentArk secret scanner pre-commit hook" in existing:
+            return
+        raise HookInstallError(
+            "A pre-commit hook already exists. Add `identark credential scan --strict` "
+            "to that hook manually so IdentArk does not overwrite it."
+        )
 
     hook_content = """#!/bin/sh
 # IdentArk secret scanner pre-commit hook
 
-if command -v identark >/dev/null 2>&1; then
-    echo "Scanning for secrets..."
-    if ! identark credential scan --strict; then
-        echo "Commit blocked: secrets detected"
-        echo "Run 'identark credential scan --fix' to resolve"
-        exit 1
-    fi
+if ! command -v identark >/dev/null 2>&1; then
+    echo "Commit blocked: IdentArk CLI is required by the installed secret-scan hook"
+    exit 1
+fi
+
+echo "Scanning for secrets..."
+if ! identark credential scan --strict; then
+    echo "Commit blocked: secrets detected or the scanner failed"
+    exit 1
 fi
 
 exit 0
 """
 
-    hook_path.write_text(hook_content)
+    hook_path.write_text(hook_content, encoding="utf-8")
     hook_path.chmod(0o755)
 
 
@@ -240,6 +268,10 @@ def remove_git_hook(project_path: Path) -> None:
 
     if hook_path.exists():
         # Only remove if it's our hook
-        content = hook_path.read_text()
+        content = hook_path.read_text(encoding="utf-8")
         if "IdentArk" in content:
             hook_path.unlink()
+
+
+class HookInstallError(Exception):
+    """Raised when a git hook cannot be installed without overwriting user configuration."""

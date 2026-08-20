@@ -80,9 +80,7 @@ def test_tokens_never_written_to_config_toml(cli_env, tmp_path):
 def test_tokens_round_trip(cli_env):
     _, config = cli_env(keyring_enabled=False)
 
-    config.save_global_config(
-        config.GlobalConfig(access_token="AAA", refresh_token="BBB")
-    )
+    config.save_global_config(config.GlobalConfig(access_token="AAA", refresh_token="BBB"))
     loaded = config.load_global_config()
 
     assert loaded.access_token == "AAA"
@@ -130,9 +128,7 @@ def test_legacy_plaintext_tokens_are_migrated(cli_env, tmp_path):
 def test_clear_all_removes_every_token(cli_env, tmp_path):
     secrets, config = cli_env(keyring_enabled=False)
 
-    config.save_global_config(
-        config.GlobalConfig(access_token="TOK", refresh_token="REF")
-    )
+    config.save_global_config(config.GlobalConfig(access_token="TOK", refresh_token="REF"))
     secrets.clear_all()
 
     assert secrets.get_secret(secrets.ACCESS_TOKEN) is None

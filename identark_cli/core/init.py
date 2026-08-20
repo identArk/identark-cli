@@ -7,7 +7,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from identark_cli.core.config import ProjectConfig, save_config
-from identark_cli.core.scanner import install_git_hook
 
 
 def initialize_project(path: str, force: bool = False) -> None:
@@ -31,14 +30,10 @@ def initialize_project(path: str, force: bool = False) -> None:
 
     # Create default configuration
     config = ProjectConfig(
-        project_name=project_path.name, enable_git_hooks=True, scan_on_commit=True
+        project_name=project_path.name, enable_git_hooks=False, scan_on_commit=True
     )
 
     save_config(config, config_file)
-
-    # Install git hook if in a git repo
-    if (project_path / ".git").exists():
-        install_git_hook(project_path)
 
     # Create .gitignore entry
     _update_gitignore(project_path)
@@ -50,15 +45,15 @@ def initialize_project(path: str, force: bool = False) -> None:
 def _update_gitignore(project_path: Path) -> None:
     """Add .identark/ to .gitignore"""
     gitignore = project_path / ".gitignore"
-    entry = "# IdentArk credential isolation\n.identark/credentials\n"
+    entry = "# IdentArk local credentials\n.identark/credentials\n"
 
     if gitignore.exists():
-        content = gitignore.read_text()
+        content = gitignore.read_text(encoding="utf-8")
         if ".identark/" not in content:
-            with open(gitignore, "a") as f:
+            with open(gitignore, "a", encoding="utf-8") as f:
                 f.write("\n" + entry)
     else:
-        gitignore.write_text(entry)
+        gitignore.write_text(entry, encoding="utf-8")
 
 
 def _create_env_example(project_path: Path) -> None:
@@ -78,7 +73,7 @@ def _create_env_example(project_path: Path) -> None:
 # DATABASE_URL=
 """
 
-    env_example.write_text(content)
+    env_example.write_text(content, encoding="utf-8")
 
 
 class ConfigExistsError(Exception):

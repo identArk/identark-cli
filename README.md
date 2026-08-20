@@ -1,206 +1,212 @@
 # IdentArk CLI
 
-The official CLI for [IdentArk](https://identark.io) - AI agent credential isolation.
+The command-line client for IdentArk credential references, agent registration,
+human approval workflows, and local development injection.
 
-## Overview
+> Release status: alpha. The package is prepared for `identark-cli` on PyPI but
+> has not been published yet. Install it from this repository until the first
+> trusted-publishing release completes.
 
-IdentArk CLI enables developers to:
+## Requirements
 
-- **Run agents with isolated credentials** - Secrets are injected at runtime, never stored in code
-- **Scan for secrets** - Prevent credential leaks before they reach git
-- **Approve operations from terminal** - HITL workflow without leaving your CLI
-- **Manage MCP servers** - Register and manage MCP tool servers
+- Python 3.11 or newer
+- An IdentArk account or scoped `csk_` API key
+- An OS keychain for device-login tokens, when available
 
-## Installation
-
-> **Status: not yet published.** `identark-cli` is not on PyPI and the Homebrew
-> tap does not exist yet. Install from source until the first release lands.
+## Install from source
 
 ```bash
-# From a checkout of this repo
 cd cloud/cli
-pip install -e .
+python -m pip install -e .
 identark --version
 ```
 
-Planned once published:
+After the first release:
 
 ```bash
-pip install identark-cli          # not available yet
-brew install identark/tap/identark  # not available yet
+python -m pip install identark-cli
 ```
 
-## Quick Start
+## Authenticate
+
+Interactive device login opens the IdentArk authorization page and stores the
+resulting Firebase session in the OS keychain:
 
 ```bash
-# 1. Authenticate with IdentArk
 identark auth login
+identark auth status
+```
 
-# 2. Initialize your project
+For headless environments, print the URL instead of opening a browser:
+
+```bash
+identark auth login --no-browser
+```
+
+For CI and agent automation, prefer a narrowly scoped key that is supplied by
+the runtime and is never persisted by the CLI:
+
+```bash
+export IDENTARK_API_KEY='csk_...'
+identark auth token
+```
+
+`identark auth token` reports the token source and storage backend but never
+prints the raw token. If an OS keychain is unavailable, the CLI warns and uses
+`~/.identark/credentials.toml` with mode `0600`; any process running as that OS
+user can still read that fallback file.
+
+## Project setup
+
+```bash
 identark init
-
-# 3. Add credentials (stored in vault, not locally)
-identark credential add OPENAI_API_KEY --ref vault://prod/openai
-
-# 4. Scan for existing secrets
-identark credential scan
-
-# 5. Run your agent with isolated credentials
-identark agent run ./my_agent.py
+identark credential add ANTHROPIC_API_KEY --ref vault://prod/anthropic
+identark credential list
+identark credential scan --strict
 ```
 
-## Commands
+Credential names must be valid environment-variable names. References are
+limited to `vault://...` and `env://...`; secret values are never written to
+`.identark/config.toml`.
 
-### Authentication
+The pre-commit scanner is opt-in and refuses to overwrite an existing hook:
 
 ```bash
-identark auth login          # Authenticate with IdentArk
-identark auth logout         # Log out
-identark auth status         # Check authentication status
+identark credential install-hook
 ```
 
-### Agent Development
+Once installed, the hook fails closed if the `identark` executable is missing
+or the scan fails.
+
+## Local agent development
+
+Create a scaffold and run its generated `src/main.py`:
 
 ```bash
-identark agent init --name my-agent    # Initialize agent project
-identark agent run ./agent.py          # Run with isolated credentials
-identark agent dev --reload            # Development mode with hot reload
-identark agent logs                    # View agent logs
+identark agent init --name my-agent --template basic
+cd my-agent
+identark credential add API_KEY --ref vault://prod/provider
+identark agent run
 ```
 
-### Credential Management
+Available templates are `basic`, `slack-bot`, and `api-service`.
+
+Register the agent with the real control-plane endpoint separately:
 
 ```bash
-identark credential list                        # List configured credentials
-identark credential add NAME --ref vault://...  # Add credential reference
-identark credential scan                        # Scan for secrets in code
-identark credential inject -- python script.py  # Run with injected credentials
+identark agent register \
+  --name my-agent \
+  --provider anthropic \
+  --model claude-sonnet-4-5 \
+  --credential-ref vault://prod/anthropic
+
+identark agent list
 ```
 
-### HITL Approvals
+### Important isolation boundary
+
+`identark agent run`, `identark agent dev`, and `identark credential inject`
+resolve scalar credentials and place them in the child process environment.
+The child process can read those values. This is useful for local development,
+but it is not a “secret never reaches the agent” boundary.
+
+For production database access or other operations where the agent must never
+receive a raw credential, use an IdentArk managed connector/executor. Structured
+credentials such as Neon database credentials are deliberately refused by local
+environment injection.
+
+## Human approvals
 
 ```bash
-identark approvals list              # List pending approvals
-identark approvals watch             # Watch approvals in real-time
-identark approvals approve <id>      # Approve a request
-identark approvals reject <id>       # Reject a request
+identark approvals list
+identark approvals inspect <approval-id>
+identark approvals approve <approval-id>
+identark approvals reject <approval-id> --reason "Not expected"
+identark approvals watch
 ```
 
-### MCP Server Management
+`watch` is a read-only monitor. Approvals always require an explicit command;
+there is no client-side auto-approve mode. Sensitive-looking keys in displayed
+tool arguments are recursively redacted. Server policy remains authoritative,
+and approval timeout defaults to deny.
+
+## MCP servers
 
 ```bash
-identark mcp server list             # List MCP servers
-identark mcp server add              # Register new server
-identark mcp server discover <id>    # Discover capabilities
-identark mcp tool list --server <id> # List available tools
-identark mcp tool execute --server <id> --tool <name>
+identark mcp server list
+identark mcp server add \
+  --name public-tools \
+  --endpoint https://mcp.example.com/rpc \
+  --transport streamable_http
+identark mcp server show <server-id>
+identark mcp tool list --server <server-id>
+identark mcp tool execute \
+  --server <server-id> \
+  --tool search \
+  --args '{"query":"example"}'
 ```
 
-### Configuration
-
-```bash
-identark config show                 # Show configuration
-identark config set key value        # Set config value
-identark config edit                 # Edit config in $EDITOR
-```
-
-## How It Works
-
-### Credential Isolation
-
-Instead of storing secrets in `.env` files:
-
-```bash
-# ❌ Bad: Secrets in .env
-OPENAI_API_KEY=sk-abc123...
-```
-
-Use IdentArk references:
-
-```bash
-# ✅ Good: Reference to vault
-identark credential add OPENAI_API_KEY --ref vault://prod/openai
-```
-
-```python
-# Your code never sees the actual secret
-import os
-api_key = os.environ["OPENAI_API_KEY"]  # Injected at runtime
-```
-
-### Git Hook Integration
-
-IdentArk automatically installs a pre-commit hook:
-
-```bash
-git commit -m "add feature"
-✓ Scanning for secrets...
-✗ Found potential secret in src/config.py:23
-✗ Commit blocked. Run 'identark credential scan --fix' to resolve.
-```
-
-### HITL from Terminal
-
-When agents need approval for high-risk operations:
-
-```bash
-$ identark approvals watch
-
-┌─────────────────────────────────────────────┐
-│ Pending Approvals (1)                       │
-├─────────────────────────────────────────────┤
-│ #1 delete_production_database               │
-│   Risk: 95 CRITICAL                         │
-│   Agent: data-cleanup-agent                 │
-│   [J]ustify [A]pprove [R]eject [S]kip: A    │
-└─────────────────────────────────────────────┘
-✓ Approved request #1
-```
+CLI registration accepts only absolute HTTPS endpoints using `http_sse` or
+`streamable_http`. Version 0.1 does not collect raw MCP bearer tokens or API
+keys. Authenticated MCP registration will be exposed only after the API accepts
+vault references rather than secret values. Capability discovery is also not
+advertised until the backend performs real discovery.
 
 ## Configuration
 
-### Project Config (`.identark/config.toml`)
+Project configuration lives in `.identark/config.toml`. Global non-secret
+settings live in `~/.identark/config.toml`.
 
-```toml
-version = "1"
-project_name = "my-agent"
-organization_id = "..."
-
-[[credentials]]
-name = "OPENAI_API_KEY"
-ref = "vault://prod/openai"
-required = true
+```bash
+identark config show
+identark config set project_name "My Agent"
+identark config get project_name
+identark config set --global api_url https://api.identark.io
 ```
 
-### Global Config (`~/.identark/config.toml`)
+Config commands protect token fields from generic `get` and `set` access. API
+URLs must use HTTPS, except `http://localhost` for local development.
 
-```toml
-version = "1"
-api_url = "https://api.identark.io"
-auto_approve_threshold = 30  # Auto-approve below this risk score
+## Environment variables
+
+| Variable | Purpose |
+| --- | --- |
+| `IDENTARK_API_KEY` | Preferred non-persisted scoped API key |
+| `IDENTARK_SESSION_TOKEN` | Non-persisted session token |
+| `IDENTARK_TOKEN` | Legacy non-persisted token alias |
+| `IDENTARK_API_URL` | Override the API endpoint for a command |
+| `IDENTARK_DISABLE_KEYRING` | Force the warned `0600` file fallback |
+| `IDENTARK_DEBUG` | Enable child-process debug mode |
+
+Token precedence is the order shown above.
+
+## Development and release gates
+
+```bash
+uv sync --project cli --locked --extra dev
+uv run --project cli ruff format --check --config cli/pyproject.toml cli/identark_cli cli/tests
+uv run --project cli ruff check --config cli/pyproject.toml cli/identark_cli cli/tests
+uv run --project cli mypy --config-file cli/pyproject.toml cli/identark_cli
+uv run --project cli pytest cli/tests
+uv build cli
 ```
 
-## Environment Variables
+CI runs those gates on Python 3.11 and 3.13, enforces at least 50% statement
+coverage, builds both distributions, and installs the wheel into a clean virtual
+environment. Releases use tags such as `cli-v0.1.0` and PyPI Trusted Publishing;
+the tag must match `identark_cli.__version__`.
 
-| Variable | Description |
-|----------|-------------|
-| `IDENTARK_API_URL` | IdentArk API endpoint |
-| `IDENTARK_TOKEN` | Authentication token |
-| `IDENTARK_DEBUG` | Enable debug logging |
+Before the first release, configure a pending PyPI Trusted Publisher for:
 
-## Security
+- PyPI project: `identark-cli`
+- GitHub repository: `identArk/backend`
+- Workflow: `cli-release.yml`
+- Environment: `pypi`
 
-- Credentials are never stored locally (only references)
-- Git hooks prevent secret commits
-- MFA required for high-risk approvals (risk > 70)
-- All operations logged with cryptographic audit trail
+## Support and license
 
-## License
-
-MIT License - see LICENSE file
-
-## Support
-
-- Documentation: https://docs.identark.io/cli
-- Issues: https://github.com/identark/cli/issues
+- Documentation: <https://docs.identark.io/cli>
+- Issues: <https://github.com/identArk/backend/issues>
 - Email: support@identark.io
+
+Licensed under the MIT License. See `LICENSE`.

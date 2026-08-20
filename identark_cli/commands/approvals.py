@@ -4,8 +4,9 @@ HITL Approval commands
 
 from __future__ import annotations
 
+import json
 import time
-from typing import Optional
+from typing import Any
 
 import typer
 from rich import box
@@ -21,22 +22,26 @@ app = typer.Typer(help="HITL approval workflow")
 
 @app.command("list")
 def list_approvals(
-    status: str = typer.Option("pending", "--status", "-s", help="Filter by status"),
     limit: int = typer.Option(20, "--limit", "-n", help="Maximum results"),
 ) -> None:
     """
     List approval requests
 
-    Shows pending, approved, or rejected HITL requests.
+    Shows pending HITL requests.
     """
     try:
+        if limit < 1 or limit > 100:
+            console.print("[red]--limit must be between 1 and 100[/red]")
+            raise typer.Exit(2)
         with get_api_client() as client:
-            response = client.get(f"/v1/mcp/approvals/pending?limit={limit}")
+            response = client.get("/v1/mcp/approvals/pending")
             response.raise_for_status()
-            approvals = response.json()
+            approvals = response.json()[:limit]
+    except typer.Exit:
+        raise
     except Exception as e:
         console.print(f"[red]Error fetching approvals:[/red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     if not approvals:
         console.print("No pending approvals")
@@ -87,27 +92,28 @@ def inspect(
             approval = response.json()
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     # Build detail panel
     risk_score = approval.get("risk_score", 0)
     risk_level = approval.get("risk_level", "unknown")
     risk_style = _risk_style(risk_score)
 
+    safe_arguments = json.dumps(_redact_sensitive(approval.get("tool_arguments", {})), indent=2)
     content = f"""
-[bold]Tool:[/bold]         {approval.get('tool_name', 'unknown')}
-[bold]Status:[/bold]       {approval.get('status', 'unknown')}
+[bold]Tool:[/bold]         {approval.get("tool_name", "unknown")}
+[bold]Status:[/bold]       {approval.get("status", "unknown")}
 [bold]Risk Score:[/bold]   [{risk_style}]{risk_score} ({risk_level})[/{risk_style}]
-[bold]Requested By:[/bold] {approval.get('requested_by', 'unknown')}
-[bold]Created:[/bold]      {approval.get('created_at', 'unknown')}
-[bold]Expires:[/bold]      {approval.get('expires_at', 'unknown')}
+[bold]Requested By:[/bold] {approval.get("requested_by", "unknown")}
+[bold]Created:[/bold]      {approval.get("created_at", "unknown")}
+[bold]Expires:[/bold]      {approval.get("expires_at", "unknown")}
 
 [bold]Risk Explanation:[/bold]
-{approval.get('risk_explanation', 'No explanation available')}
+{approval.get("risk_explanation", "No explanation available")}
 
 [bold]Tool Arguments:[/bold]
 ```json
-{approval.get('tool_arguments', {})}
+{safe_arguments}
 ```
     """
 
@@ -122,8 +128,8 @@ def inspect(
 @app.command()
 def approve(
     approval_id: str = typer.Argument(..., help="Approval request ID"),
-    comment: Optional[str] = typer.Option(None, "--comment", "-c", help="Approval comment"),
-    mfa_code: Optional[str] = typer.Option(None, "--mfa", help="MFA code (required for high risk)"),
+    comment: str | None = typer.Option(None, "--comment", "-c", help="Approval comment"),
+    mfa_code: str | None = typer.Option(None, "--mfa", help="MFA code (required for high risk)"),
 ) -> None:
     """
     Approve a pending request
@@ -156,7 +162,7 @@ def approve(
 
     except Exception as e:
         console.print(f"[red]Approval failed:[/red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @app.command()
@@ -182,20 +188,22 @@ def reject(
 
     except Exception as e:
         console.print(f"[red]Rejection failed:[/red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @app.command()
 def watch(
     refresh: int = typer.Option(5, "--refresh", help="Refresh interval in seconds"),
-    auto_approve: bool = typer.Option(False, "--auto-approve", help="Auto-approve low-risk (<30)"),
 ) -> None:
     """
     Watch approvals in real-time
 
-    Interactive terminal UI for monitoring and approving
-    HITL requests as they arrive.
+    Monitor HITL requests as they arrive. Use approve, reject, or inspect
+    from another terminal to act on a request.
     """
+    if refresh < 1:
+        console.print("[red]--refresh must be at least 1 second[/red]")
+        raise typer.Exit(2)
     console.print("[bold]Watching for approval requests...[/bold]")
     console.print("[dim]Press Ctrl+C to exit[/dim]\n")
 
@@ -204,9 +212,9 @@ def watch(
             # Fetch pending approvals
             try:
                 with get_api_client() as client:
-                    response = client.get("/v1/mcp/approvals/pending?limit=10")
+                    response = client.get("/v1/mcp/approvals/pending")
                     response.raise_for_status()
-                    approvals = response.json()
+                    approvals = response.json()[:10]
             except Exception as e:
                 console.print(f"[red]Error:[/red] {e}")
                 time.sleep(refresh)
@@ -229,15 +237,10 @@ def watch(
                     risk = approval.get("risk_score", 0)
                     risk_style = _risk_style(risk)
 
-                    # Auto-approve low risk if enabled
-                    if auto_approve and risk < 30:
-                        _auto_approve(approval["id"])
-                        action = "[green]Auto-approved[/green]"
+                    if risk >= 70:
+                        action = "[red]MFA required[/red]"
                     else:
-                        if risk >= 70:
-                            action = "[red]MFA required[/red]"
-                        else:
-                            action = "[yellow]Review needed[/yellow]"
+                        action = "[yellow]Review needed[/yellow]"
 
                     table.add_row(
                         approval["id"][:8],
@@ -248,8 +251,9 @@ def watch(
 
                 console.print(table)
 
-            # Show controls
-            console.print("\n[dim]Commands: approve <id> | reject <id> | inspect <id> | quit[/dim]")
+            console.print(
+                "\n[dim]Use identark approvals inspect/approve/reject in another terminal[/dim]"
+            )
 
             # Simple input handling (would be more sophisticated in real implementation)
             time.sleep(refresh)
@@ -285,15 +289,33 @@ def _time_since(iso_timestamp: str) -> str:
             return f"{delta.seconds // 60}m ago"
         else:
             return "just now"
-    except:
+    except (TypeError, ValueError):
         return "unknown"
 
 
-def _auto_approve(approval_id: str) -> None:
-    """Auto-approve a low-risk request"""
-    try:
-        with get_api_client() as client:
-            payload = {"decision": "approved", "comment": "Auto-approved (low risk)"}
-            client.post(f"/v1/mcp/approvals/{approval_id}/decision", json=payload)
-    except:
-        pass
+_SENSITIVE_KEY_PARTS = (
+    "api_key",
+    "apikey",
+    "authorization",
+    "credential",
+    "password",
+    "private_key",
+    "secret",
+    "token",
+)
+
+
+def _redact_sensitive(value: Any) -> Any:
+    """Return a display-safe copy of nested tool arguments."""
+    if isinstance(value, dict):
+        return {
+            key: (
+                "*** REDACTED ***"
+                if any(part in str(key).lower() for part in _SENSITIVE_KEY_PARTS)
+                else _redact_sensitive(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_sensitive(item) for item in value]
+    return value

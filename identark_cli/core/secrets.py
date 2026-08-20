@@ -2,8 +2,8 @@
 Secret storage for the IdentArk CLI.
 
 Auth tokens are credentials. They belong in the OS keychain, not in a config
-file — a CLI that ships credential isolation should not be the thing on the box
-leaking a long-lived refresh token to anything that can read $HOME.
+file — a managed-access CLI should not leak a long-lived refresh token to
+anything that can read $HOME.
 
 Resolution order:
 
@@ -24,7 +24,7 @@ import os
 import stat
 import warnings
 from pathlib import Path
-from typing import Final, Optional
+from typing import Any, Final
 
 import toml
 
@@ -36,7 +36,7 @@ FALLBACK_FILE: Final[Path] = CONFIG_DIR / "credentials.toml"
 # Keys we manage. Explicit so a typo cannot silently create a new slot.
 ACCESS_TOKEN: Final[str] = "access_token"
 REFRESH_TOKEN: Final[str] = "refresh_token"
-_MANAGED_KEYS: Final[tuple] = (ACCESS_TOKEN, REFRESH_TOKEN)
+_MANAGED_KEYS: Final[tuple[str, ...]] = (ACCESS_TOKEN, REFRESH_TOKEN)
 
 _warned_about_fallback = False
 
@@ -82,17 +82,18 @@ def _warn_fallback_once() -> None:
     )
 
 
-def _read_fallback() -> dict:
+def _read_fallback() -> dict[str, str]:
     if not FALLBACK_FILE.exists():
         return {}
     try:
-        with open(FALLBACK_FILE) as fh:
-            return toml.load(fh)
+        with open(FALLBACK_FILE, encoding="utf-8") as fh:
+            raw = toml.load(fh)
+            return {str(key): value for key, value in raw.items() if isinstance(value, str)}
     except Exception:
         return {}
 
 
-def _write_fallback(data: dict) -> None:
+def _write_fallback(data: dict[str, str]) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     # Create with 0600 from the start - do not widen-then-narrow, which leaves
     # a window where the token is readable.
@@ -102,7 +103,7 @@ def _write_fallback(data: dict) -> None:
         stat.S_IRUSR | stat.S_IWUSR,
     )
     try:
-        with os.fdopen(fd, "w") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             toml.dump(data, fh)
     finally:
         try:
@@ -111,7 +112,7 @@ def _write_fallback(data: dict) -> None:
             pass
 
 
-def set_secret(key: str, value: Optional[str]) -> None:
+def set_secret(key: str, value: str | None) -> None:
     """Store (or clear, when value is None) a secret."""
     if value is None:
         delete_secret(key)
@@ -140,7 +141,7 @@ def set_secret(key: str, value: Optional[str]) -> None:
         raise SecretStoreError(f"Could not persist {key}: {exc}") from exc
 
 
-def get_secret(key: str) -> Optional[str]:
+def get_secret(key: str) -> str | None:
     """Retrieve a secret, or None."""
     if _keyring_available():
         try:
@@ -177,7 +178,7 @@ def clear_all() -> None:
         delete_secret(key)
 
 
-def migrate_plaintext_tokens(config_data: dict) -> bool:
+def migrate_plaintext_tokens(config_data: dict[str, Any]) -> bool:
     """Move tokens found in a legacy config.toml into secure storage.
 
     CLI <= 0.1.0 wrote access_token and refresh_token straight into
@@ -190,7 +191,7 @@ def migrate_plaintext_tokens(config_data: dict) -> bool:
     migrated = False
     for key in _MANAGED_KEYS:
         value = config_data.get(key)
-        if value:
+        if isinstance(value, str) and value:
             try:
                 set_secret(key, value)
             except SecretStoreError:

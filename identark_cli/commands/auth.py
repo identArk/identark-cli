@@ -14,7 +14,7 @@ console = Console()
 app = typer.Typer(help="Authentication and login")
 
 
-@app.command()
+@app.command("login")
 def login_cmd(
     api_url: str = typer.Option(
         "https://api.identark.io", "--api-url", "-a", help="IdentArk API URL"
@@ -24,29 +24,30 @@ def login_cmd(
     """
     Authenticate with IdentArk
 
-    Opens a browser for OAuth authentication. Use --no-browser for
-    headless environments.
+    Opens the IdentArk device-authorization page. Use --no-browser for
+    headless environments and open the printed URL yourself.
     """
     try:
         login(api_url=api_url, browser=not no_browser)
     except Exception as e:
         console.print(f"[red]Login failed:[/red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
-@app.command()
+@app.command("logout")
 def logout_cmd(
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
 ) -> None:
     """
     Log out from IdentArk
 
-    Clears local credentials and revokes access tokens.
+    Clears locally stored access and refresh tokens.
     """
     if not force:
         status = get_auth_status()
         if status.authenticated:
-            confirm = typer.confirm(f"Log out {status.email}?")
+            identity = status.email or "the current session"
+            confirm = typer.confirm(f"Log out {identity}?")
             if not confirm:
                 console.print("Cancelled")
                 return
@@ -55,7 +56,7 @@ def logout_cmd(
         logout()
     except Exception as e:
         console.print(f"[red]Logout failed:[/red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @app.command()
@@ -76,6 +77,8 @@ def status() -> None:
         table.add_row("Email", status.email or "Unknown")
         table.add_row("Organization", status.org_name or "Unknown")
         table.add_row("User ID", status.user_id or "Unknown")
+        table.add_row("Source", status.source)
+        table.add_row("Verified", "Yes" if status.verified else "No")
     else:
         table.add_row("Status", "[red]✗ Not authenticated[/red]")
         table.add_row("Email", "-")
@@ -90,18 +93,27 @@ def status() -> None:
 @app.command()
 def token() -> None:
     """
-    Show current access token (for debugging)
+    Report whether an authentication token is configured
 
-    [yellow]Warning:[/yellow] This exposes sensitive information.
-    Use with caution and never share the output.
+    Raw access tokens are deliberately never printed. Use this command for
+    safe authentication diagnostics in support requests.
     """
-    from identark_cli.core.auth import get_access_token
+    from identark_cli.core.auth import get_access_token, get_auth_status
+    from identark_cli.core.secrets import storage_backend_name
 
     try:
-        token = get_access_token()
-        console.print(f"Access token: [dim]{token[:20]}...[/dim]")
-        console.print("\n[yellow]Use this token in the Authorization header:[/yellow]")
-        console.print(f"Authorization: Bearer {token}")
+        get_access_token()
+        status = get_auth_status()
+        console.print("[green]✓ Authentication token is configured[/green]")
+        console.print(f"Source: {status.source}")
+        console.print(f"Verified: {'yes' if status.verified else 'not by this command'}")
+        storage = (
+            "environment (not persisted)"
+            if status.source.startswith("IDENTARK_")
+            else storage_backend_name()
+        )
+        console.print(f"Stored in: {storage}")
+        console.print("[dim]Raw tokens are never displayed by IdentArk CLI.[/dim]")
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None

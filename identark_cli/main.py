@@ -5,8 +5,6 @@ IdentArk CLI - Main entry point
 
 from __future__ import annotations
 
-from typing import Optional
-
 import typer
 from rich.console import Console
 from rich.panel import Panel
@@ -21,7 +19,7 @@ console = Console()
 # Create the main app
 app = typer.Typer(
     name="identark",
-    help="IdentArk CLI - AI agent credential isolation",
+    help="IdentArk CLI - credential references, approvals, and managed access",
     add_completion=True,
     rich_markup_mode="rich",
     no_args_is_help=True,
@@ -29,36 +27,38 @@ app = typer.Typer(
 
 # Add subcommands
 app.add_typer(auth.app, name="auth", help="Authentication and login")
-app.add_typer(agent.app, name="agent", help="Agent development and execution")
-app.add_typer(credential.app, name="credential", help="Credential management")
+app.add_typer(agent.app, name="agent", help="Agent scaffolding, registration, and local execution")
+app.add_typer(
+    credential.app,
+    name="credential",
+    help="Credential references, scanning, and local injection",
+)
 app.add_typer(approvals.app, name="approvals", help="HITL approval workflow")
 app.add_typer(mcp.app, name="mcp", help="MCP server management")
 app.add_typer(config.app, name="config", help="Configuration management")
 
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def main(
-    version: Optional[bool] = typer.Option(
+    version: bool | None = typer.Option(
         None, "--version", "-v", help="Show version and exit", is_eager=True
     ),
-    verbose: bool = typer.Option(False, "--verbose", help="Enable verbose output"),
-    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
 ) -> None:
     """
-    IdentArk CLI - Secure AI agent credential management
+    IdentArk CLI - Secure AI agent access management
 
-    Run agents with isolated credentials, manage secrets, and approve
-    high-risk operations from your terminal.
+    Run local development processes with short-lived credential injection,
+    manage references, and review high-risk operations from your terminal.
 
     [bold]Quick start:[/bold]
 
     $ identark auth login              # Authenticate with IdentArk
 
-    $ identark agent init              # Initialize agent project
+    $ identark agent init --name demo  # Initialize agent project
 
     $ identark credential scan         # Scan for secrets in code
 
-    $ identark agent run ./my_agent.py # Run with isolated credentials
+    $ identark agent run ./my_agent.py # Run with local credential injection
     """
     if version:
         console.print(f"identark version {__version__}")
@@ -67,14 +67,13 @@ def main(
 
 @app.command()
 def init(
-    path: Optional[str] = typer.Option(".", "--path", "-p", help="Path to initialize"),
+    path: str = typer.Option(".", "--path", "-p", help="Path to initialize"),
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing configuration"),
 ) -> None:
     """
     Initialize IdentArk in the current directory
 
-    Creates .identark/config.toml and sets up the project for
-    credential isolation.
+    Creates .identark/config.toml and sets up project credential references.
     """
     from identark_cli.core.init import initialize_project
 
@@ -84,10 +83,11 @@ def init(
         console.print("\nNext steps:")
         console.print("  1. Run: identark auth login")
         console.print("  2. Run: identark credential add <name>")
-        console.print("  3. Run: identark agent run <script.py>")
+        console.print("  3. Optional: identark credential install-hook")
+        console.print("  4. Run: identark agent run <script.py>")
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @app.command()
@@ -95,8 +95,7 @@ def status() -> None:
     """
     Show IdentArk status and configuration
 
-    Displays current authentication status, configured credentials,
-    and active sessions.
+    Displays current authentication status and configured credential references.
     """
     from identark_cli.core.auth import get_auth_status
     from identark_cli.core.config import load_config
@@ -114,8 +113,12 @@ def status() -> None:
     auth_status = get_auth_status()
     console.print("\n[bold]Authentication:[/bold]")
     if auth_status.authenticated:
-        console.print(f"  ✓ Logged in as [green]{auth_status.email}[/green]")
-        console.print(f"  Organization: {auth_status.org_name}")
+        if auth_status.email:
+            console.print(f"  ✓ Logged in as [green]{auth_status.email}[/green]")
+        else:
+            console.print(f"  ✓ Authenticated via [green]{auth_status.source}[/green]")
+        if auth_status.org_name:
+            console.print(f"  Organization: {auth_status.org_name}")
     else:
         console.print("  ✗ Not authenticated")
         console.print("    Run: [cyan]identark auth login[/cyan]")
@@ -126,7 +129,7 @@ def status() -> None:
         console.print("\n[bold]Configuration:[/bold]")
         console.print(f"  Project: {config.project_name or 'Not configured'}")
         console.print(f"  Credentials: {len(config.credentials)}")
-    except:
+    except Exception:
         console.print("\n[bold]Configuration:[/bold]")
         console.print("  No project configured")
         console.print("    Run: [cyan]identark init[/cyan]")
