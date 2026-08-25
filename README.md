@@ -90,11 +90,24 @@ identark audit list
 
 ### Promote a working sample to Gateway Mode
 
-After storing your provider credential in IdentArk, promote the project with
-its **reference**—never the credential value:
+Connect a normal API-key provider from the terminal, with no dashboard hunting
+and no secret placed in shell history or a project file:
 
 ```bash
-identark promote --credential-ref vault://prod/openai
+identark credential connect openai
+# Paste the key twice into the hidden prompt.
+```
+
+The key goes directly over the authenticated HTTPS connection to the IdentArk
+vault. The CLI never accepts it as a command-line argument, never prints it,
+and never writes it to `.identark/config.toml`. It returns only a vault
+reference. For providers that require multiple fields, use the documented
+structured-credential setup instead.
+
+Then promote the project with that **reference**—never the credential value:
+
+```bash
+identark promote --credential-ref secret/orgs/<org-id>/providers/openai --provider openai
 python identark_gateway_sample.py
 identark audit list
 ```
@@ -110,7 +123,7 @@ Run a governed smoke test as part of promotion only when you intend to make a
 provider call, since it may incur a charge:
 
 ```bash
-identark promote --credential-ref vault://prod/openai --run
+identark promote --credential-ref secret/orgs/<org-id>/providers/openai --provider openai --run
 ```
 
 The capability can invoke only the registered agent's session. It cannot read

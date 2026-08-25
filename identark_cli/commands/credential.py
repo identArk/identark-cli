@@ -5,6 +5,7 @@ Credential management commands
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 import typer
@@ -17,6 +18,20 @@ from identark_cli.core.config import CredentialRef, load_config, save_config
 
 console = Console()
 app = typer.Typer(help="Credential references, scanning, and local injection")
+
+# This guided command deliberately starts with providers whose normal setup is
+# one API key. More complex provider setups (for example Bedrock or Azure
+# OpenAI) should use their documented, structured credential flow instead of
+# pretending that one hidden prompt is sufficient.
+CONNECTABLE_API_KEY_PROVIDERS = {
+    "anthropic": "Anthropic",
+    "kimi": "Kimi",
+    "mistral": "Mistral",
+    "moonshot": "Moonshot",
+    "openai": "OpenAI",
+    "openrouter": "OpenRouter",
+}
+_CREDENTIAL_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 
 @app.command("list")
@@ -113,6 +128,88 @@ def add(
 
     console.print(f"✓ Added credential [cyan]{name}[/cyan]")
     console.print(f"  Reference: {ref}")
+
+
+@app.command()
+def connect(
+    provider: str = typer.Argument(
+        ...,
+        help="API-key provider to connect (openai, anthropic, mistral, kimi, moonshot, openrouter)",
+    ),
+    label: str = typer.Option("default", "--label", "-l", help="Safe label for this provider key"),
+) -> None:
+    """Store one provider API key in IdentArk without putting it in a command.
+
+    The key is accepted only through a hidden terminal prompt, sent directly to
+    the authenticated credential endpoint, and then released from this command.
+    Only the returned vault reference is shown or used for Gateway Mode.
+    """
+    normalized_provider = provider.strip().lower()
+    if normalized_provider not in CONNECTABLE_API_KEY_PROVIDERS:
+        supported = ", ".join(sorted(CONNECTABLE_API_KEY_PROVIDERS))
+        raise typer.BadParameter(
+            f"supported providers are: {supported}",
+            param_hint="provider",
+        )
+
+    normalized_label = label.strip()
+    if not _CREDENTIAL_LABEL_PATTERN.fullmatch(normalized_label):
+        raise typer.BadParameter(
+            "must be 1-64 characters using letters, numbers, hyphens, or underscores",
+            param_hint="--label",
+        )
+
+    provider_name = CONNECTABLE_API_KEY_PROVIDERS[normalized_provider]
+    credential_value = typer.prompt(
+        f"Paste your {provider_name} API key",
+        hide_input=True,
+        confirmation_prompt=True,
+    ).strip()
+    if not credential_value:
+        console.print("[red]Credential was not connected.[/red] Enter a non-empty API key.")
+        raise typer.Exit(2)
+
+    try:
+        with get_api_client() as client:
+            response = client.post(
+                "/v1/credentials",
+                json={
+                    "provider": normalized_provider,
+                    "credential": credential_value,
+                    "kind": "api_key",
+                    "category": "llm",
+                    "label": normalized_label,
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+    except Exception:
+        # Never display exception text or response bodies here: either could
+        # contain a provider key supplied by a proxy or upstream service.
+        console.print(
+            "[red]Credential could not be connected.[/red] Check your login and try again."
+        )
+        raise typer.Exit(1) from None
+    finally:
+        # Python strings cannot be reliably zeroed, but releasing this reference
+        # immediately prevents later CLI work from accidentally reusing it.
+        credential_value = ""
+
+    credential_ref = payload.get("credential_ref") if isinstance(payload, dict) else None
+    if not isinstance(credential_ref, str) or not credential_ref:
+        console.print(
+            "[red]Credential could not be connected.[/red] The server returned no vault reference."
+        )
+        raise typer.Exit(1)
+
+    console.print(f"[green]✓ {provider_name} credential connected[/green]")
+    console.print(f"  Vault reference: [cyan]{credential_ref}[/cyan]")
+    console.print("  Provider key: stored in IdentArk; never written to this project")
+    console.print("\nNext, create a short-lived Gateway Mode capability:")
+    console.print(
+        f"  [cyan]identark promote --credential-ref {credential_ref} "
+        f"--provider {normalized_provider} --run[/cyan]"
+    )
 
 
 @app.command()

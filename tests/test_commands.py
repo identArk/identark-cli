@@ -63,6 +63,7 @@ class FakeClient:
         (["mcp", "server", "add", "--help"], ("--auth-type", "--token", "--api-key")),
         (["credential", "scan", "--help"], ("--fix",)),
         (["credential", "inject", "--help"], ("--env-file",)),
+        (["credential", "connect", "--help"], ("--key", "--credential")),
         (["approvals", "list", "--help"], ("--status",)),
         (["approvals", "watch", "--help"], ("--auto-approve",)),
     ],
@@ -369,6 +370,66 @@ def test_structured_credential_cannot_be_injected_as_environment_variable(
         credential._fetch_credential_value("vault://prod/neon")
 
     assert client.calls[0][2]["params"] == {"path": "prod/neon"}
+
+
+def test_credential_connect_posts_hidden_key_and_returns_only_vault_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "sk-connect-only-in-request"
+    credential_ref = "secret/orgs/org-123/providers/openai"
+    client = FakeClient([FakeResponse({"credential_ref": credential_ref})])
+    monkeypatch.setattr(credential, "get_api_client", lambda: client)
+
+    result = runner.invoke(app, ["credential", "connect", "openai"], input=f"{secret}\n{secret}\n")
+
+    assert result.exit_code == 0, result.output
+    assert secret not in result.output
+    assert client.calls[0][:2] == ("POST", "/v1/credentials")
+    assert client.calls[0][2]["json"] == {
+        "provider": "openai",
+        "credential": secret,
+        "kind": "api_key",
+        "category": "llm",
+        "label": "default",
+    }
+    assert credential_ref in result.output
+    output_without_terminal_wrapping = " ".join(result.output.split())
+    assert (
+        f"identark promote --credential-ref {credential_ref} --provider openai --run"
+        in output_without_terminal_wrapping
+    )
+
+
+def test_credential_connect_never_echoes_key_when_server_error_is_leaky(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "sk-never-echo-this"
+
+    class LeakyResponse(FakeResponse):
+        def raise_for_status(self) -> None:
+            raise RuntimeError(f"upstream error mentioning {secret}")
+
+    client = FakeClient([LeakyResponse({})])
+    monkeypatch.setattr(credential, "get_api_client", lambda: client)
+
+    result = runner.invoke(app, ["credential", "connect", "openai"], input=f"{secret}\n{secret}\n")
+
+    assert result.exit_code == 1
+    assert secret not in result.output
+    assert "Credential could not be connected" in result.output
+
+
+def test_credential_connect_rejects_unsupported_provider_before_prompt_or_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = FakeClient([])
+    monkeypatch.setattr(credential, "get_api_client", lambda: client)
+
+    result = runner.invoke(app, ["credential", "connect", "bedrock"])
+
+    assert result.exit_code == 2
+    assert "supported providers" in result.output
+    assert client.calls == []
 
 
 def test_agent_list_and_delete_use_registered_agent_endpoints(
