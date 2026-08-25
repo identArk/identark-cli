@@ -58,6 +58,19 @@ class CredentialRef(BaseModel):
         return value
 
 
+class GatewayModeConfig(BaseModel):
+    """Non-secret metadata needed to run a promoted agent."""
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    agent_id: str
+    session_id: str
+    provider: str
+    model: str
+    credential_ref: str
+    capability_expires_at: str | None = None
+
+
 class ProjectConfig(BaseModel):
     """Project-level IdentArk configuration"""
 
@@ -79,6 +92,10 @@ class ProjectConfig(BaseModel):
 
     # MCP settings
     mcp_servers: list[dict[str, Any]] = Field(default_factory=list)
+
+    # Gateway Mode metadata. The capability token belongs exclusively in the
+    # OS keychain / protected fallback store, never in project configuration.
+    gateway_mode: GatewayModeConfig | None = None
 
 
 class GlobalConfig(BaseModel):

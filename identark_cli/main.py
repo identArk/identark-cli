@@ -12,7 +12,7 @@ from rich.table import Table
 from rich.text import Text
 
 from identark_cli import __version__
-from identark_cli.commands import agent, approvals, audit, auth, config, credential, mcp
+from identark_cli.commands import agent, approvals, audit, auth, config, credential, mcp, promote
 from identark_cli.core.activity import ActivityRecordError, read_local_activity
 from identark_cli.core.config import get_project_root
 from identark_cli.core.init import FirstRunProvider
@@ -39,6 +39,7 @@ app.add_typer(
 )
 app.add_typer(approvals.app, name="approvals", help="HITL approval workflow")
 app.add_typer(audit.app, name="audit", help="Authoritative control-plane audit trail")
+app.command("promote")(promote.promote)
 app.add_typer(mcp.app, name="mcp", help="MCP server management")
 app.add_typer(config.app, name="config", help="Configuration management")
 

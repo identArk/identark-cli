@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-from identark_cli.commands import agent, approvals, audit, credential, mcp
+from identark_cli.commands import agent, approvals, audit, credential, mcp, promote
 from identark_cli.commands.approvals import _redact_sensitive
 from identark_cli.core.config import CredentialRef, ProjectConfig, load_config, save_config
 from identark_cli.main import app
@@ -159,6 +159,71 @@ def test_audit_list_uses_control_plane_audit_endpoint(monkeypatch: pytest.Monkey
     assert client.calls[0][:2] == ("GET", "/v1/audit")
     assert client.calls[0][2]["params"] == {"limit": 1}
     assert "control plane" in result.output
+
+
+def test_promote_mints_agent_bound_capability_and_writes_separate_sample(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from identark_cli.core.config import load_config
+    from identark_cli.core.init import initialize_project
+
+    initialize_project(str(tmp_path))
+    client = FakeClient(
+        [
+            FakeResponse({"id": "agent-123"}),
+            FakeResponse({"session_id": "session-456"}),
+            FakeResponse({"api_key": "csk_short_lived", "expires_at": "2026-08-25T12:00:00+00:00"}),
+        ]
+    )
+    stored: list[str] = []
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(promote, "get_api_client", lambda: client)
+    monkeypatch.setattr(
+        "identark_cli.core.promotion.store_project_capability",
+        lambda _root, capability: stored.append(capability),
+    )
+
+    result = runner.invoke(
+        app,
+        ["promote", "--credential-ref", "vault://prod/openai", "--provider", "openai"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stored == ["csk_short_lived"]
+    assert [(method, path) for method, path, _ in client.calls] == [
+        ("POST", "/v1/agents"),
+        ("POST", "/v1/sessions"),
+        ("POST", "/v1/keys"),
+    ]
+    key_payload = client.calls[2][2]["json"]
+    assert key_payload["scopes"] == ["llm:invoke"]
+    assert key_payload["agent_id"] == "agent-123"
+    assert key_payload["expires_in_minutes"] == 15
+    config = load_config(tmp_path / ".identark" / "config.toml")
+    assert config.gateway_mode is not None
+    assert config.gateway_mode.session_id == "session-456"
+    sample = (tmp_path / "identark_gateway_sample.py").read_text(encoding="utf-8")
+    assert "ControlPlaneGateway" in sample
+    assert "OPENAI_API_KEY" not in sample
+    assert "csk_short_lived" not in sample
+    compile(sample, str(tmp_path / "identark_gateway_sample.py"), "exec")
+
+
+def test_promote_rejects_local_environment_references_before_network(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from identark_cli.core.init import initialize_project
+
+    initialize_project(str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    client = FakeClient([])
+    monkeypatch.setattr(promote, "get_api_client", lambda: client)
+
+    result = runner.invoke(app, ["promote", "--credential-ref", "env://OPENAI_API_KEY"])
+
+    assert result.exit_code == 1
+    assert "vault reference" in result.output
+    assert client.calls == []
 
 
 def test_credential_add_rejects_ref_and_env_together(

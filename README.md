@@ -88,6 +88,35 @@ the provider credential. Inspect the resulting authoritative audit records with:
 identark audit list
 ```
 
+### Promote a working sample to Gateway Mode
+
+After storing your provider credential in IdentArk, promote the project with
+its **reference**—never the credential value:
+
+```bash
+identark promote --credential-ref vault://prod/openai
+python identark_gateway_sample.py
+identark audit list
+```
+
+`promote` registers (or reuses) the agent, creates a bounded session, and mints
+a 15-minute `llm:invoke` capability bound to that agent. The capability is put
+directly in the OS keychain (or its mode-`0600` fallback), while
+`.identark/config.toml` contains only non-secret metadata. The generated
+`identark_gateway_sample.py` is separate from the local sample and uses
+`ControlPlaneGateway`; it never reads a provider credential.
+
+Run a governed smoke test as part of promotion only when you intend to make a
+provider call, since it may incur a charge:
+
+```bash
+identark promote --credential-ref vault://prod/openai --run
+```
+
+The capability can invoke only the registered agent's session. It cannot read
+or administer credentials, and it expires automatically. Re-run `promote` to
+mint a fresh short-lived capability when needed.
+
 ### Manual project setup
 
 ```bash
