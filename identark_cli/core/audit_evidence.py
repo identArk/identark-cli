@@ -8,8 +8,9 @@ from dataclasses import dataclass
 from typing import Any
 
 EVIDENCE_FORMAT = "identark.approval-chain.evidence/v1"
+EVIDENCE_V2_FORMAT = "identark.approval-decision.evidence/v2"
 EVIDENCE_CANONICALIZATION = "python-json-sort-keys-v1"
-_PAYLOAD_FIELDS = frozenset(
+_V1_PAYLOAD_FIELDS = frozenset(
     {
         "approval_id",
         "request_id",
@@ -21,6 +22,29 @@ _PAYLOAD_FIELDS = frozenset(
         "requested_at",
         "decided_at",
         "previous_hash",
+    }
+)
+_V2_PAYLOAD_FIELDS = frozenset(
+    {
+        "approval_id",
+        "approval_record_hash",
+        "risk_factors",
+        "risk_indicators",
+        "risk_explanation",
+        "policy",
+        "previous_hash",
+    }
+)
+_V2_POLICY_FIELDS = frozenset({"outcome", "enforcement_source", "auto_approve", "matched_policies"})
+_V2_MATCHED_POLICY_FIELDS = frozenset(
+    {
+        "policy_id",
+        "version_sha256",
+        "priority",
+        "risk_threshold",
+        "auto_approve",
+        "required_approvers",
+        "is_default",
     }
 )
 
@@ -41,7 +65,7 @@ class EvidenceVerification:
 
 
 def compute_hash(payload: dict[str, Any]) -> str:
-    """Reproduce the v1 approval-chain digest without importing server code."""
+    """Reproduce an approval-evidence digest without importing server code."""
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
@@ -54,7 +78,8 @@ def verify_evidence_bundle(bundle: object) -> EvidenceVerification:
     """
     if not isinstance(bundle, dict):
         raise AuditEvidenceError("evidence must be a JSON object")
-    if bundle.get("format") != EVIDENCE_FORMAT:
+    evidence_format = bundle.get("format")
+    if evidence_format not in {EVIDENCE_FORMAT, EVIDENCE_V2_FORMAT}:
         raise AuditEvidenceError("unsupported evidence format")
     if bundle.get("algorithm") != "sha256":
         raise AuditEvidenceError("unsupported evidence hash algorithm")
@@ -65,6 +90,9 @@ def verify_evidence_bundle(bundle: object) -> EvidenceVerification:
     if not isinstance(records, list):
         raise AuditEvidenceError("evidence records must be a list")
 
+    payload_fields = (
+        _V1_PAYLOAD_FIELDS if evidence_format == EVIDENCE_FORMAT else _V2_PAYLOAD_FIELDS
+    )
     expected_previous: str | None = None
     for position, record in enumerate(records):
         if not isinstance(record, dict):
@@ -75,7 +103,7 @@ def verify_evidence_bundle(bundle: object) -> EvidenceVerification:
         previous_hash = record.get("previous_hash")
         if not isinstance(approval_id, str) or not approval_id:
             raise AuditEvidenceError("evidence record is missing its approval identifier")
-        if not isinstance(payload, dict) or set(payload) != _PAYLOAD_FIELDS:
+        if not isinstance(payload, dict) or set(payload) != payload_fields:
             raise AuditEvidenceError("evidence record has an unexpected hashed payload")
         if payload.get("approval_id") != approval_id:
             raise AuditEvidenceError("evidence record identifier does not match its hashed payload")
@@ -87,6 +115,11 @@ def verify_evidence_bundle(bundle: object) -> EvidenceVerification:
             raise AuditEvidenceError("evidence record is missing its stored hash")
         if previous_hash is not None and not isinstance(previous_hash, str):
             raise AuditEvidenceError("evidence record predecessor must be a string or null")
+
+        if evidence_format == EVIDENCE_V2_FORMAT:
+            if record.get("approval_record_hash") != payload.get("approval_record_hash"):
+                raise AuditEvidenceError("v2 evidence link does not match its hashed payload")
+            _validate_v2_payload(payload)
 
         computed_hash = compute_hash(payload)
         if stored_hash != computed_hash:
@@ -120,3 +153,42 @@ def verify_evidence_bundle(bundle: object) -> EvidenceVerification:
         records_checked=len(records),
         head_hash=expected_previous,
     )
+
+
+def _validate_v2_payload(payload: dict[str, Any]) -> None:
+    """Reject v2 files that smuggle request data into a purportedly safe proof."""
+    if (
+        not isinstance(payload.get("approval_record_hash"), str)
+        or not payload["approval_record_hash"]
+    ):
+        raise AuditEvidenceError("v2 evidence is missing its linked v1 approval hash")
+    factors = payload.get("risk_factors")
+    if not isinstance(factors, dict) or any(
+        not isinstance(name, str) or not isinstance(score, (int, float)) or isinstance(score, bool)
+        for name, score in factors.items()
+    ):
+        raise AuditEvidenceError("v2 evidence has invalid risk factors")
+    indicators = payload.get("risk_indicators")
+    if not isinstance(indicators, list) or not all(isinstance(item, str) for item in indicators):
+        raise AuditEvidenceError("v2 evidence has invalid risk indicators")
+    if not isinstance(payload.get("risk_explanation"), str):
+        raise AuditEvidenceError("v2 evidence has invalid risk explanation")
+    policy = payload.get("policy")
+    if not isinstance(policy, dict) or set(policy) != _V2_POLICY_FIELDS:
+        raise AuditEvidenceError("v2 evidence has an unexpected policy snapshot")
+    if not isinstance(policy.get("outcome"), str) or not isinstance(
+        policy.get("enforcement_source"), str
+    ):
+        raise AuditEvidenceError("v2 evidence has invalid policy outcome")
+    if not isinstance(policy.get("auto_approve"), bool):
+        raise AuditEvidenceError("v2 evidence has invalid auto-approval state")
+    matched = policy.get("matched_policies")
+    if not isinstance(matched, list):
+        raise AuditEvidenceError("v2 evidence has invalid matched policies")
+    for item in matched:
+        if not isinstance(item, dict) or set(item) != _V2_MATCHED_POLICY_FIELDS:
+            raise AuditEvidenceError("v2 evidence has an unexpected matched policy")
+        if not isinstance(item.get("policy_id"), str) or not isinstance(
+            item.get("version_sha256"), str
+        ):
+            raise AuditEvidenceError("v2 evidence has invalid policy version metadata")

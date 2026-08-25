@@ -65,19 +65,30 @@ def export_audit_evidence(
         help="Where to write the portable approval evidence bundle",
     ),
     force: bool = typer.Option(False, "--force", help="Replace an existing evidence file"),
+    evidence_format: str = typer.Option(
+        "v1",
+        "--format",
+        help="Evidence format: v1 (approval chain) or v2 (risk and policy decision evidence)",
+    ),
 ) -> None:
     """Export non-secret HITL decision evidence for independent review.
 
     The bundle contains the fields protected by the approval hash chain, never
     tool arguments, prompts, outputs, credentials, or capability tokens.
     """
+    if evidence_format not in {"v1", "v2"}:
+        console.print("[red]Evidence format must be v1 or v2.[/red]")
+        raise typer.Exit(2)
     if output.exists() and not force:
         console.print(f"[red]Evidence file already exists:[/red] {output}")
         console.print("Use --force only after reviewing the existing file.")
         raise typer.Exit(2)
     try:
         with get_api_client() as client:
-            response = client.get("/v1/mcp/audit/chain/evidence")
+            endpoint = "/v1/mcp/audit/chain/evidence"
+            if evidence_format == "v2":
+                endpoint += "/v2"
+            response = client.get(endpoint)
             response.raise_for_status()
             bundle = response.json()
         verification = verify_evidence_bundle(bundle)
@@ -96,10 +107,16 @@ def export_audit_evidence(
     console.print(f"  File: [cyan]{output}[/cyan]")
     console.print(f"  Records: {verification.records_checked}")
     console.print(f"  Verify offline: [cyan]identark audit verify {output}[/cyan]")
-    console.print(
-        "[dim]This proves integrity of supplied records, not that an exporter included every "
-        "historical record or that the file originated from a particular server.[/dim]"
-    )
+    if evidence_format == "v2":
+        console.print(
+            "[dim]V2 adds risk and policy-decision evidence. Verify its linked v1 approval "
+            "records separately; neither file proves completeness or origin.[/dim]"
+        )
+    else:
+        console.print(
+            "[dim]This proves integrity of supplied records, not that an exporter included every "
+            "historical record or that the file originated from a particular server.[/dim]"
+        )
 
 
 @app.command("verify")

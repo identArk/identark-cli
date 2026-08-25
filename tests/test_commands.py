@@ -14,6 +14,7 @@ from identark_cli.commands.approvals import _redact_sensitive
 from identark_cli.core.audit_evidence import (
     EVIDENCE_CANONICALIZATION,
     EVIDENCE_FORMAT,
+    EVIDENCE_V2_FORMAT,
     compute_hash,
 )
 from identark_cli.core.config import CredentialRef, ProjectConfig, load_config, save_config
@@ -201,6 +202,42 @@ def _evidence_bundle() -> dict[str, Any]:
     }
 
 
+def _v2_evidence_bundle() -> dict[str, Any]:
+    payload = {
+        "approval_id": "approval-1",
+        "approval_record_hash": "v1-approval-hash",
+        "risk_factors": {"operation_type": 0.9},
+        "risk_indicators": ["DESTRUCTIVE_OPERATION"],
+        "risk_explanation": "Operation Type: high risk (90%)",
+        "policy": {
+            "outcome": "approval_required",
+            "enforcement_source": "hitl_policy",
+            "auto_approve": False,
+            "matched_policies": [],
+        },
+        "previous_hash": None,
+    }
+    record_hash = compute_hash(payload)
+    return {
+        "format": EVIDENCE_V2_FORMAT,
+        "algorithm": "sha256",
+        "canonicalization": EVIDENCE_CANONICALIZATION,
+        "exported_at": "2026-08-25T10:02:00+00:00",
+        "organization_id": "org-1",
+        "records": [
+            {
+                "approval_id": "approval-1",
+                "approval_record_hash": "v1-approval-hash",
+                "hashed_payload": payload,
+                "record_hash": record_hash,
+                "previous_hash": None,
+            }
+        ],
+        "chain_head": record_hash,
+        "verification_scope": "Checks the integrity of supplied v2 decision records.",
+    }
+
+
 def test_audit_export_writes_verified_non_secret_evidence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -229,6 +266,36 @@ def test_audit_verify_detects_tampered_evidence_offline(tmp_path: Path) -> None:
 
     assert result.exit_code == 1
     assert "integrity check failed" in result.output
+
+
+def test_audit_v2_export_and_offline_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = _v2_evidence_bundle()
+    client = FakeClient([FakeResponse(bundle)])
+    output = tmp_path / "decision-evidence.json"
+    monkeypatch.setattr(audit, "get_api_client", lambda: client)
+
+    exported = runner.invoke(app, ["audit", "export", "--format", "v2", "--output", str(output)])
+    verified = runner.invoke(app, ["audit", "verify", str(output)])
+
+    assert exported.exit_code == 0, exported.output
+    assert client.calls[0][:2] == ("GET", "/v1/mcp/audit/chain/evidence/v2")
+    assert "risk and policy-decision evidence" in exported.output
+    assert verified.exit_code == 0, verified.output
+    assert "integrity verified" in verified.output
+
+
+def test_audit_v2_verify_rejects_unsafe_policy_payload(tmp_path: Path) -> None:
+    bundle = _v2_evidence_bundle()
+    bundle["records"][0]["hashed_payload"]["policy"]["cel_expression"] = "args.secret"
+    evidence_path = tmp_path / "unsafe-v2-evidence.json"
+    evidence_path.write_text(json.dumps(bundle), encoding="utf-8")
+
+    result = runner.invoke(app, ["audit", "verify", str(evidence_path)])
+
+    assert result.exit_code == 1
+    assert "could not be verified" in result.output
 
 
 def test_promote_mints_agent_bound_capability_and_writes_separate_sample(

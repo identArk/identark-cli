@@ -152,6 +152,25 @@ records supplied in the bundle. It cannot prove that an exporter included every
 historical record or independently attest the bundle's origin; those require a
 separately anchored or signed checkpoint.
 
+### Export risk and policy decision evidence (v2)
+
+New approvals can also carry a separate, backwards-compatible v2 evidence
+chain. It explains the numeric risk factors, categorical indicators, and the
+policy decision that required review, while linking each explanation to the
+corresponding v1 approval hash:
+
+```bash
+identark audit export --format v2 --output identark-decision-evidence.json
+identark audit verify identark-decision-evidence.json
+```
+
+V2 never changes or replaces v1. Verify the linked v1 bundle separately when
+you need to check both the approval decision and its explanation. To keep the
+portable file safe, it excludes tool arguments, prompts, outputs, credentials,
+capability tokens, policy expressions, and policy condition values. Matched
+policy metadata includes a version digest that an authorised reviewer can
+compare with the policy they hold.
+
 ### Manual project setup
 
 ```bash
