@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,11 @@ from typer.testing import CliRunner
 
 from identark_cli.commands import agent, approvals, audit, credential, mcp, promote
 from identark_cli.commands.approvals import _redact_sensitive
+from identark_cli.core.audit_evidence import (
+    EVIDENCE_CANONICALIZATION,
+    EVIDENCE_FORMAT,
+    compute_hash,
+)
 from identark_cli.core.config import CredentialRef, ProjectConfig, load_config, save_config
 from identark_cli.main import app
 
@@ -160,6 +166,69 @@ def test_audit_list_uses_control_plane_audit_endpoint(monkeypatch: pytest.Monkey
     assert client.calls[0][:2] == ("GET", "/v1/audit")
     assert client.calls[0][2]["params"] == {"limit": 1}
     assert "control plane" in result.output
+
+
+def _evidence_bundle() -> dict[str, Any]:
+    payload = {
+        "approval_id": "approval-1",
+        "request_id": "request-1",
+        "decision": "approved",
+        "approver_id": "approver-1",
+        "mfa_verified": True,
+        "risk_score": 94,
+        "tool_name": "postgres.delete",
+        "requested_at": "2026-08-25T10:00:00+00:00",
+        "decided_at": "2026-08-25T10:01:00+00:00",
+        "previous_hash": None,
+    }
+    record_hash = compute_hash(payload)
+    return {
+        "format": EVIDENCE_FORMAT,
+        "algorithm": "sha256",
+        "canonicalization": EVIDENCE_CANONICALIZATION,
+        "exported_at": "2026-08-25T10:02:00+00:00",
+        "organization_id": "org-1",
+        "records": [
+            {
+                "approval_id": "approval-1",
+                "hashed_payload": payload,
+                "record_hash": record_hash,
+                "previous_hash": None,
+            }
+        ],
+        "chain_head": record_hash,
+        "verification_scope": "Checks the integrity of supplied records.",
+    }
+
+
+def test_audit_export_writes_verified_non_secret_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = _evidence_bundle()
+    client = FakeClient([FakeResponse(bundle)])
+    output = tmp_path / "approval-evidence.json"
+    monkeypatch.setattr(audit, "get_api_client", lambda: client)
+
+    result = runner.invoke(app, ["audit", "export", "--output", str(output)])
+
+    assert result.exit_code == 0, result.output
+    assert client.calls[0][:2] == ("GET", "/v1/mcp/audit/chain/evidence")
+    assert output.exists()
+    assert output.read_text(encoding="utf-8") == json.dumps(bundle, indent=2, sort_keys=True) + "\n"
+    assert "tool_arguments" not in output.read_text(encoding="utf-8")
+    assert "Verify offline" in result.output
+
+
+def test_audit_verify_detects_tampered_evidence_offline(tmp_path: Path) -> None:
+    bundle = _evidence_bundle()
+    bundle["records"][0]["hashed_payload"]["risk_score"] = 1
+    evidence_path = tmp_path / "tampered-evidence.json"
+    evidence_path.write_text(json.dumps(bundle), encoding="utf-8")
+
+    result = runner.invoke(app, ["audit", "verify", str(evidence_path)])
+
+    assert result.exit_code == 1
+    assert "integrity check failed" in result.output
 
 
 def test_promote_mints_agent_bound_capability_and_writes_separate_sample(

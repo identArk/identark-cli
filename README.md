@@ -130,6 +130,28 @@ The capability can invoke only the registered agent's session. It cannot read
 or administer credentials, and it expires automatically. Re-run `promote` to
 mint a fresh short-lived capability when needed.
 
+### Export approval evidence for an independent reviewer
+
+After a governed workflow has produced HITL decisions, a human with an
+IdentArk login can export the decision chain and give the resulting file to an
+auditor or customer. The reviewer does not need IdentArk access to verify it:
+
+```bash
+identark audit export --output identark-approval-evidence.json
+identark audit verify identark-approval-evidence.json
+```
+
+The bundle contains only decision fields covered by the hash chain—such as the
+tool name, risk score, decision, timestamps, and preceding hash. It never
+contains tool arguments, prompts, model output, credential values, or
+capability tokens. `audit verify` recomputes every SHA-256 digest and chain
+link locally, without an API call.
+
+This is deliberately a narrow claim: it proves the integrity and order of the
+records supplied in the bundle. It cannot prove that an exporter included every
+historical record or independently attest the bundle's origin; those require a
+separately anchored or signed checkpoint.
+
 ### Manual project setup
 
 ```bash

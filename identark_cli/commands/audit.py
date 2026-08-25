@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import typer
 from rich.console import Console
 from rich.table import Table
 
+from identark_cli.core.audit_evidence import AuditEvidenceError, verify_evidence_bundle
 from identark_cli.core.auth import get_api_client
 
 console = Console()
@@ -50,3 +54,82 @@ def list_audit_records(
             str(entry.get("session_id") or "—"),
         )
     console.print(table)
+
+
+@app.command("export")
+def export_audit_evidence(
+    output: Path = typer.Option(
+        Path("identark-approval-evidence.json"),
+        "--output",
+        "-o",
+        help="Where to write the portable approval evidence bundle",
+    ),
+    force: bool = typer.Option(False, "--force", help="Replace an existing evidence file"),
+) -> None:
+    """Export non-secret HITL decision evidence for independent review.
+
+    The bundle contains the fields protected by the approval hash chain, never
+    tool arguments, prompts, outputs, credentials, or capability tokens.
+    """
+    if output.exists() and not force:
+        console.print(f"[red]Evidence file already exists:[/red] {output}")
+        console.print("Use --force only after reviewing the existing file.")
+        raise typer.Exit(2)
+    try:
+        with get_api_client() as client:
+            response = client.get("/v1/mcp/audit/chain/evidence")
+            response.raise_for_status()
+            bundle = response.json()
+        verification = verify_evidence_bundle(bundle)
+        if not verification.valid:
+            raise AuditEvidenceError("server returned evidence that did not verify")
+        output.write_text(json.dumps(bundle, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    except Exception:
+        # Avoid printing response bodies or exception text: evidence commands
+        # must remain safe even when a proxy returns unexpected sensitive data.
+        console.print(
+            "[red]Could not export audit evidence.[/red] Check your sign-in and try again."
+        )
+        raise typer.Exit(1) from None
+
+    console.print("[green]✓ Approval evidence exported[/green]")
+    console.print(f"  File: [cyan]{output}[/cyan]")
+    console.print(f"  Records: {verification.records_checked}")
+    console.print(f"  Verify offline: [cyan]identark audit verify {output}[/cyan]")
+    console.print(
+        "[dim]This proves integrity of supplied records, not that an exporter included every "
+        "historical record or that the file originated from a particular server.[/dim]"
+    )
+
+
+@app.command("verify")
+def verify_audit_evidence(
+    evidence: Path = typer.Argument(
+        ..., exists=True, readable=True, help="Evidence JSON file to verify"
+    ),
+) -> None:
+    """Verify a supplied approval evidence bundle locally, without an API call."""
+    try:
+        bundle = json.loads(evidence.read_text(encoding="utf-8"))
+        verification = verify_evidence_bundle(bundle)
+    except (OSError, json.JSONDecodeError, AuditEvidenceError):
+        console.print(
+            "[red]Evidence could not be verified.[/red] Check that the file is intact JSON."
+        )
+        raise typer.Exit(1) from None
+
+    if not verification.valid:
+        console.print("[red]Evidence integrity check failed.[/red]")
+        console.print(f"  Records checked: {verification.records_checked}")
+        if verification.failure_position is not None:
+            console.print(f"  First failing record: {verification.failure_position + 1}")
+        console.print(f"  Reason: {verification.failure_reason}")
+        raise typer.Exit(1)
+
+    console.print("[green]✓ Evidence integrity verified[/green]")
+    console.print(f"  Records checked: {verification.records_checked}")
+    console.print(f"  Chain head: {verification.head_hash or 'empty chain'}")
+    console.print(
+        "[dim]This verifies the supplied records' hashes and order offline. It cannot prove "
+        "whether other records were omitted or attest the source of this file.[/dim]"
+    )
