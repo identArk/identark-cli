@@ -6,11 +6,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from identark_cli.commands import agent, approvals, credential, mcp
+from typer.testing import CliRunner
+
+from identark_cli.commands import agent, approvals, audit, credential, mcp
 from identark_cli.commands.approvals import _redact_sensitive
 from identark_cli.core.config import CredentialRef, ProjectConfig, load_config, save_config
 from identark_cli.main import app
-from typer.testing import CliRunner
 
 runner = CliRunner()
 
@@ -101,6 +102,63 @@ def test_agent_run_rejects_missing_explicit_entrypoint(
 
     assert result.exit_code == 1
     assert "Entry point not found" in result.output
+
+
+def test_init_with_provider_prints_a_complete_first_run_path(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        ["init", "--path", str(tmp_path), "--provider", "openai"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "pip install" in result.output
+    assert "identark agent run identark_sample.py" in result.output
+    assert "identark trail" in result.output
+    assert "not a governed audit trail" in result.output
+
+
+def test_trail_verifies_and_displays_local_activity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from identark_cli.core.activity import record_local_activity
+    from identark_cli.core.init import initialize_project
+
+    initialize_project(str(tmp_path))
+    record_local_activity(tmp_path, provider="openai", model="gpt-4o-mini", success=True)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["trail"])
+
+    assert result.exit_code == 0, result.output
+    assert "Local development activity" in result.output
+    assert "Verified local record" in result.output
+
+
+def test_audit_list_uses_control_plane_audit_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = FakeClient(
+        [
+            FakeResponse(
+                {
+                    "entries": [
+                        {
+                            "created_at": "2026-08-25T00:00:00+00:00",
+                            "operation": "llm_invoke",
+                            "success": True,
+                            "session_id": "session-1",
+                        }
+                    ]
+                }
+            )
+        ]
+    )
+    monkeypatch.setattr(audit, "get_api_client", lambda: client)
+
+    result = runner.invoke(app, ["audit", "list", "--limit", "1"])
+
+    assert result.exit_code == 0, result.output
+    assert client.calls[0][:2] == ("GET", "/v1/audit")
+    assert client.calls[0][2]["params"] == {"limit": 1}
+    assert "control plane" in result.output
 
 
 def test_credential_add_rejects_ref_and_env_together(

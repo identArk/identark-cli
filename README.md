@@ -58,6 +58,38 @@ user can still read that fallback file.
 
 ## Project setup
 
+### First run: prove the path locally
+
+Choose a provider and generate a runnable sample in one command. The command
+stores only an `env://` reference in `.identark/config.toml`; it never asks for,
+prints, or writes a provider key.
+
+```bash
+# Choose one: openai, anthropic, or ollama
+identark init --provider openai
+pip install "identark[openai]"
+export OPENAI_API_KEY='…' # set in your shell, never in the project
+identark agent run identark_sample.py
+identark trail
+```
+
+The generated sample makes one real provider call through `DirectGateway` and
+writes a hash-linked, privacy-preserving local activity record at
+`.identark/activity.jsonl`. It records only provider, model, time, success, and
+estimated cost—never prompts, model output, credential values, references, or
+exception text. The file is ignored by Git.
+
+This is intentionally **not** the control-plane audit trail: local development
+places the provider key in the sample process for that process lifetime. When
+you move to Gateway Mode, the agent receives a scoped IdentArk token instead of
+the provider credential. Inspect the resulting authoritative audit records with:
+
+```bash
+identark audit list
+```
+
+### Manual project setup
+
 ```bash
 identark init
 identark credential add ANTHROPIC_API_KEY --ref vault://prod/anthropic
@@ -114,6 +146,11 @@ For production database access or other operations where the agent must never
 receive a raw credential, use an IdentArk managed connector/executor. Structured
 credentials such as Neon database credentials are deliberately refused by local
 environment injection.
+
+The `trail` command verifies the hash-linked local development record. It is
+useful for confirming a first run without exposing sensitive content, but it is
+not compliance evidence. `audit list` reads the append-only control-plane audit
+log and shows only activity that actually passed through a governed route.
 
 ## Human approvals
 

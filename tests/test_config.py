@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
+
 from identark_cli.core.config import (
     CredentialRef,
     GlobalConfig,
@@ -12,9 +14,8 @@ from identark_cli.core.config import (
     load_config,
     save_config,
 )
-from identark_cli.core.init import initialize_project
+from identark_cli.core.init import FirstRunProvider, initialize_project
 from identark_cli.core.scanner import HookInstallError, install_git_hook
-from pydantic import ValidationError
 
 
 @pytest.mark.parametrize(
@@ -66,6 +67,25 @@ def test_init_does_not_install_or_overwrite_git_hook(tmp_path: Path) -> None:
 
     assert existing.read_text(encoding="utf-8") == "#!/bin/sh\necho existing\n"
     assert load_config(project / ".identark" / "config.toml").enable_git_hooks is False
+
+
+def test_init_with_provider_creates_a_secret_free_first_run_sample(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+
+    setup = initialize_project(str(project), provider=FirstRunProvider.OPENAI)
+
+    config = load_config(project / ".identark" / "config.toml")
+    sample = (project / "identark_sample.py").read_text(encoding="utf-8")
+    gitignore = (project / ".gitignore").read_text(encoding="utf-8")
+    assert setup is not None
+    assert setup.credential_name == "OPENAI_API_KEY"
+    assert config.credentials[0].name == "OPENAI_API_KEY"
+    assert config.credentials[0].ref == "env://OPENAI_API_KEY"
+    assert "record_local_activity" in sample
+    assert "OPENAI_API_KEY" in sample
+    assert "credentials stay" not in sample
+    assert ".identark/activity.jsonl" in gitignore
+    compile(sample, str(project / "identark_sample.py"), "exec")
 
 
 def test_hook_install_refuses_to_overwrite_existing_hook(tmp_path: Path) -> None:

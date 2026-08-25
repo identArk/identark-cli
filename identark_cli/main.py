@@ -8,10 +8,14 @@ from __future__ import annotations
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from rich.table import Table
 from rich.text import Text
 
 from identark_cli import __version__
-from identark_cli.commands import agent, approvals, auth, config, credential, mcp
+from identark_cli.commands import agent, approvals, audit, auth, config, credential, mcp
+from identark_cli.core.activity import ActivityRecordError, read_local_activity
+from identark_cli.core.config import get_project_root
+from identark_cli.core.init import FirstRunProvider
 
 # Rich console for pretty output
 console = Console()
@@ -34,6 +38,7 @@ app.add_typer(
     help="Credential references, scanning, and local injection",
 )
 app.add_typer(approvals.app, name="approvals", help="HITL approval workflow")
+app.add_typer(audit.app, name="audit", help="Authoritative control-plane audit trail")
 app.add_typer(mcp.app, name="mcp", help="MCP server management")
 app.add_typer(config.app, name="config", help="Configuration management")
 
@@ -69,6 +74,9 @@ def main(
 def init(
     path: str = typer.Option(".", "--path", "-p", help="Path to initialize"),
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing configuration"),
+    provider: FirstRunProvider | None = typer.Option(
+        None, "--provider", help="Generate a runnable local sample for this provider"
+    ),
 ) -> None:
     """
     Initialize IdentArk in the current directory
@@ -78,8 +86,23 @@ def init(
     from identark_cli.core.init import initialize_project
 
     try:
-        initialize_project(path, force=force)
+        setup = initialize_project(path, force=force, provider=provider)
         console.print(f"✓ Initialized IdentArk in [bold]{path}[/bold]")
+        if setup:
+            console.print("\n[bold]First run — local development only:[/bold]")
+            console.print(f"  1. Install: {setup.install_command}")
+            if provider != FirstRunProvider.OLLAMA:
+                console.print(
+                    f"  2. Set {setup.credential_name} in your shell "
+                    "(it is never written to the project)"
+                )
+            console.print("  3. Run: identark agent run identark_sample.py")
+            console.print("  4. Inspect: identark trail")
+            console.print(
+                "\n[dim]The local record is not a governed audit trail. Gateway Mode "
+                "records the authoritative trail.[/dim]"
+            )
+            return
         console.print("\nNext steps:")
         console.print("  1. Run: identark auth login")
         console.print("  2. Run: identark credential add <name>")
@@ -88,6 +111,44 @@ def init(
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1) from None
+
+
+@app.command("trail")
+def activity_trail(
+    limit: int = typer.Option(10, "--limit", "-n", min=1, max=200, help="Local records to show"),
+) -> None:
+    """Verify and show local development activity without exposing prompts or secrets."""
+    root = get_project_root()
+    if root is None:
+        console.print("[red]No IdentArk project found. Run 'identark init' first.[/red]")
+        raise typer.Exit(1)
+    try:
+        events = read_local_activity(root, limit=limit)
+    except ActivityRecordError as exc:
+        console.print(f"[red]Could not verify local activity record:[/red] {exc}")
+        raise typer.Exit(1) from None
+    if not events:
+        console.print("[dim]No local activity records yet. Run identark_sample.py first.[/dim]")
+        return
+    table = Table(title="Local development activity (hash-linked)")
+    table.add_column("When", style="dim")
+    table.add_column("Provider", style="cyan")
+    table.add_column("Model")
+    table.add_column("Result")
+    table.add_column("Cost")
+    for event in events:
+        table.add_row(
+            str(event["recorded_at"]),
+            str(event["provider"]),
+            str(event["model"]),
+            "[green]success[/green]" if event["success"] else "[red]failed[/red]",
+            f"${float(event['cost_usd']):.6f}" if event["cost_usd"] is not None else "—",
+        )
+    console.print(table)
+    console.print(
+        "[dim]Verified local record. This is not the control-plane audit trail; "
+        "use `identark audit list` after Gateway Mode is configured.[/dim]"
+    )
 
 
 @app.command()
