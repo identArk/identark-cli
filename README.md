@@ -171,6 +171,25 @@ capability tokens, policy expressions, and policy condition values. Matched
 policy metadata includes a version digest that an authorised reviewer can
 compare with the policy they hold.
 
+### Run the local Trust Proof
+
+Before creating an account or connecting a provider, run the repository's
+local proof. It records one rejected medium-risk decision in an ephemeral
+SQLite database, exports the real v1 and v2 evidence shapes, verifies them with
+the CLI, then shows that an altered field is rejected:
+
+```bash
+cd cloud/demos/trust-proof
+make run
+make verify
+make tamper
+```
+
+The proof uses no account, provider key, customer data, external provider call,
+or tool execution. Its outputs are gitignored. It demonstrates integrity and
+ordering of the supplied records; it intentionally does not claim completeness
+or server origin.
+
 ### Manual project setup
 
 ```bash

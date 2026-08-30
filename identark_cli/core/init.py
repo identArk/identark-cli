@@ -66,6 +66,7 @@ def initialize_project(
     )
     setup = PROVIDER_SETUPS[provider] if provider else None
     if setup and setup.credential_name:
+        assert provider is not None
         config.credentials.append(
             CredentialRef(
                 name=setup.credential_name,

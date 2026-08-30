@@ -54,14 +54,26 @@ identark = "identark_cli.main:app"
 [project.urls]
 Homepage = "https://identark.io"
 Documentation = "https://docs.identark.io/cli"
-Repository = "https://github.com/identArk/backend/tree/main/cli"
-Issues = "https://github.com/identArk/backend/issues"
+Repository = "https://github.com/identark/identark-cli"
+Issues = "https://github.com/identark/identark-cli/issues"
 
 [tool.hatch.version]
 path = "identark_cli/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["identark_cli"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/.gitignore",
+    "/identark_cli",
+    "/tests",
+    "/LICENSE",
+    "/README.md",
+    "/SECURITY.md",
+    "/CONTRIBUTING.md",
+    "/pyproject.toml",
+]
 
 [tool.ruff]
 line-length = 100

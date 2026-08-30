@@ -9,10 +9,11 @@ from typing import Any
 import httpx
 import jwt
 import pytest
+from typer.testing import CliRunner
+
 from identark_cli.commands import auth as auth_commands
 from identark_cli.core import auth
 from identark_cli.core.config import GlobalConfig
-from typer.testing import CliRunner
 
 
 class StubResponse:
