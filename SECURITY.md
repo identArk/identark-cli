@@ -15,14 +15,22 @@ Do not include live credentials, customer data, production tokens, or sensitive
 logs. Use synthetic values and redact request identifiers unless IdentArk asks
 for them through a protected channel.
 
-We will acknowledge receipt as soon as practical, validate the report, and
-coordinate remediation and disclosure. Please allow a reasonable remediation
-window before public disclosure.
+We aim to acknowledge complete reports within two business days, share an
+initial assessment within seven days, and coordinate remediation and disclosure
+based on severity. Complex issues may take longer; we will keep reporters
+informed when possible. Please allow a reasonable remediation window before
+public disclosure.
 
 ## Supported versions
 
 The CLI is currently alpha software. Security fixes are applied to the latest
 released version. Users should upgrade promptly after a security release.
+
+| Version | Supported |
+|---|---|
+| Latest released version | Yes |
+| Unreleased source code | Best effort |
+| Older releases | No |
 
 ## Security model
 
@@ -39,3 +47,9 @@ read it.
 The published CLI distribution must contain only the allowlisted public package
 surface and must never import private control-plane modules. CI inspects built
 archives before release.
+
+## Coordinated disclosure
+
+Do not access data that is not yours, degrade service, persist access, or move
+laterally while researching. We will coordinate a disclosure date, credit
+preferences, and a security advisory when appropriate.

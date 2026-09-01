@@ -66,11 +66,18 @@ packages = ["identark_cli"]
 [tool.hatch.build.targets.sdist]
 include = [
     "/.gitignore",
+    "/CHANGELOG.md",
+    "/CODE_OF_CONDUCT.md",
     "/identark_cli",
     "/tests",
+    "/GOVERNANCE.md",
     "/LICENSE",
+    "/MAINTAINERS.md",
     "/README.md",
+    "/RELEASING.md",
     "/SECURITY.md",
+    "/scripts",
+    "/SUPPORT.md",
     "/CONTRIBUTING.md",
     "/pyproject.toml",
 ]

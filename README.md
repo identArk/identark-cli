@@ -16,7 +16,8 @@ human approval workflows, and local development injection.
 ## Install from source
 
 ```bash
-cd cloud/cli
+git clone https://github.com/identark/identark-cli.git
+cd identark-cli
 python -m pip install -e .
 identark --version
 ```
@@ -171,25 +172,6 @@ capability tokens, policy expressions, and policy condition values. Matched
 policy metadata includes a version digest that an authorised reviewer can
 compare with the policy they hold.
 
-### Run the local Trust Proof
-
-Before creating an account or connecting a provider, run the repository's
-local proof. It records one rejected medium-risk decision in an ephemeral
-SQLite database, exports the real v1 and v2 evidence shapes, verifies them with
-the CLI, then shows that an altered field is rejected:
-
-```bash
-cd cloud/demos/trust-proof
-make run
-make verify
-make tamper
-```
-
-The proof uses no account, provider key, customer data, external provider call,
-or tool execution. Its outputs are gitignored. It demonstrates integrity and
-ordering of the supplied records; it intentionally does not claim completeness
-or server origin.
-
 ### Manual project setup
 
 ```bash
@@ -322,30 +304,39 @@ Token precedence is the order shown above.
 ## Development and release gates
 
 ```bash
-uv sync --project cli --locked --extra dev
-uv run --project cli ruff format --check --config cli/pyproject.toml cli/identark_cli cli/tests
-uv run --project cli ruff check --config cli/pyproject.toml cli/identark_cli cli/tests
-uv run --project cli mypy --config-file cli/pyproject.toml cli/identark_cli
-uv run --project cli pytest cli/tests
-uv build cli
+uv sync --locked --extra dev
+uv run ruff format --check identark_cli tests scripts
+uv run ruff check identark_cli tests scripts
+uv run mypy identark_cli
+uv run pytest
+uv build
+uv run python scripts/check_distribution.py dist/*
 ```
 
 CI runs those gates on Python 3.11 and 3.13, enforces at least 50% statement
 coverage, builds both distributions, and installs the wheel into a clean virtual
-environment. Releases use tags such as `cli-v0.1.0` and PyPI Trusted Publishing;
+environment. Releases use tags such as `v0.1.0` and PyPI Trusted Publishing;
 the tag must match `identark_cli.__version__`.
 
 Before the first release, configure a pending PyPI Trusted Publisher for:
 
 - PyPI project: `identark-cli`
-- GitHub repository: `identArk/backend`
-- Workflow: `cli-release.yml`
+- GitHub repository: `identark/identark-cli`
+- Workflow: `publish.yml`
 - Environment: `pypi`
+
+## Contributing
+
+Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) for
+local setup, the public/private boundary, and the required verification checks.
+Please follow the [Code of Conduct](CODE_OF_CONDUCT.md), use the
+[support channels](SUPPORT.md) for questions, and report vulnerabilities only
+through the private process in [SECURITY.md](SECURITY.md).
 
 ## Support and license
 
 - Documentation: <https://docs.identark.io/cli>
-- Issues: <https://github.com/identArk/backend/issues>
+- Issues: <https://github.com/identark/identark-cli/issues>
 - Email: support@identark.io
 
 Licensed under the MIT License. See `LICENSE`.

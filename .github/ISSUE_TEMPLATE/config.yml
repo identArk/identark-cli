@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: mailto:security@identark.io
+    about: Report vulnerabilities privately. Never include secrets in a public issue.
+  - name: Questions and support
+    url: https://github.com/identark/identark-cli/discussions
+    about: Ask usage questions and discuss designs with the community.

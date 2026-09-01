@@ -1,0 +1,40 @@
+name: Feature request
+description: Propose an improvement to the public IdentArk CLI.
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Significant changes to authentication, credential handling, audit evidence,
+        or public command behaviour need design agreement before a pull request.
+        Keep proposals within the public CLI boundary.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What developer problem should this solve? Describe the use case, not just the implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed command or behaviour
+      description: Include a small command-line example if useful.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: true
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Compatibility and security
+      options:
+        - label: This proposal does not require exposing private service internals or raw credentials.
+          required: true
+        - label: I have considered backward compatibility, error redaction, and the server-side trust boundary.
+          required: true

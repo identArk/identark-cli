@@ -47,14 +47,20 @@ FORBIDDEN_SUFFIXES = {
 PRIVATE_KEY_HEADER = re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----")
 SDIST_ROOT_FILES = {
     ".gitignore",
+    "CHANGELOG.md",
+    "CODE_OF_CONDUCT.md",
     "CONTRIBUTING.md",
+    "GOVERNANCE.md",
     "LICENSE",
+    "MAINTAINERS.md",
     "PKG-INFO",
     "README.md",
+    "RELEASING.md",
     "SECURITY.md",
+    "SUPPORT.md",
     "pyproject.toml",
 }
-SDIST_ROOT_DIRS = {"identark_cli", "tests"}
+SDIST_ROOT_DIRS = {"identark_cli", "scripts", "tests"}
 
 
 class BoundaryViolationError(Exception):

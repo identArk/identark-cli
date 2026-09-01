@@ -1,0 +1,14 @@
+# Default review ownership
+* @Goldokpa
+
+# Security-sensitive public boundaries
+/identark_cli/core/auth.py @Goldokpa
+/identark_cli/core/secrets.py @Goldokpa
+/identark_cli/core/audit_evidence.py @Goldokpa
+/identark_cli/commands/approvals.py @Goldokpa
+/identark_cli/commands/credential.py @Goldokpa
+/identark_cli/commands/promote.py @Goldokpa
+/scripts/check_distribution.py @Goldokpa
+/SECURITY.md @Goldokpa
+/.github/workflows/ @Goldokpa
+/pyproject.toml @Goldokpa

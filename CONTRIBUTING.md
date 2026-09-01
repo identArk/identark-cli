@@ -2,10 +2,13 @@
 
 Thank you for helping make secure agent infrastructure easier to use.
 
-The CLI is open source, but the hosted IdentArk control plane is not. Until the
-CLI is extracted to its dedicated repository, contributions must stay entirely
-within `cli/`. Do not add imports from the parent repository or rely on private
-control-plane implementation details.
+Please read the [Code of Conduct](CODE_OF_CONDUCT.md) and
+[governance model](GOVERNANCE.md) before contributing.
+
+The CLI is open source, but the hosted IdentArk control plane is not. This
+repository communicates with the service only through documented public HTTPS
+contracts. Do not add imports from, or rely on, private service implementation
+details.
 
 ## Development setup
 
@@ -14,21 +17,21 @@ Requirements:
 - Python 3.11 or newer
 - `uv` 0.12.5 or newer
 
-From the control-plane repository checkout:
+From this repository checkout:
 
 ```bash
-uv sync --project cli --locked --extra dev
-uv run --project cli pytest cli/tests
-uv run --project cli ruff format --check --config cli/pyproject.toml cli/identark_cli cli/tests cli/scripts
-uv run --project cli ruff check --config cli/pyproject.toml cli/identark_cli cli/tests cli/scripts
-uv run --project cli mypy --config-file cli/pyproject.toml cli/identark_cli
+uv sync --locked --extra dev
+uv run pytest
+uv run ruff format --check identark_cli tests scripts
+uv run ruff check identark_cli tests scripts
+uv run mypy identark_cli
 ```
 
 To verify the package boundary:
 
 ```bash
-uv build cli
-uv run --project cli python cli/scripts/check_distribution.py cli/dist/*
+uv build
+uv run python scripts/check_distribution.py dist/*
 ```
 
 ## Contribution rules
@@ -47,6 +50,17 @@ uv run --project cli python cli/scripts/check_distribution.py cli/dist/*
   authentication, authorization, risk, approval, and audit policy.
 - Add tests for behavior and security boundaries changed by the pull request.
 
+## Before you start
+
+Small documentation corrections and focused bug fixes can go directly to a pull
+request. For new commands, integrations, dependencies, public API changes, or
+changes to authentication, credential handling, audit evidence, or approval
+behaviour, open an issue and agree on the design first.
+
+Useful contribution areas include documentation, tests, usability improvements,
+accessibility, command output, and reproducible bug reports. Please keep a pull
+request focused; unrelated refactors make security review harder.
+
 ## Pull requests
 
 Keep changes focused and describe:
@@ -59,6 +73,24 @@ Keep changes focused and describe:
 
 Changes that weaken credential isolation, token handling, audit behavior, or
 the package boundary will not be accepted.
+
+## Commit sign-off
+
+Contributions use the [Developer Certificate of Origin
+1.1](https://developercertificate.org/). Sign each commit with:
+
+```bash
+git commit -s -m "fix: concise description"
+```
+
+The sign-off certifies that you have the right to submit the work under the MIT
+license. Conventional Commit prefixes such as `feat`, `fix`, `docs`, `test`,
+`refactor`, and `chore` are encouraged.
+
+## License
+
+By contributing, you agree that your contributions are licensed under the
+repository's [MIT License](LICENSE).
 
 ## Security reports
 

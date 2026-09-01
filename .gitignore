@@ -1,6 +1,7 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+.python-version
 
 .venv/
 venv/
@@ -17,6 +18,9 @@ dist/
 .env
 .env.*
 !.env.example
+
+# IdentArk project state may contain credential references and local activity.
+.identark/
 
 .DS_Store
 *.log

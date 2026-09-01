@@ -1,0 +1,71 @@
+name: Bug report
+description: Report a reproducible defect in the IdentArk CLI.
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for helping improve IdentArk. Do not include API keys, session
+        tokens, credentials, customer data, or private service details. Report
+        security vulnerabilities privately to security@identark.io.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: This report contains no secrets, tokens, or private customer data.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: IdentArk CLI version
+      description: Output of `identark --version`.
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Python and operating system
+      placeholder: Python 3.13 on Ubuntu 24.04
+    validations:
+      required: true
+  - type: dropdown
+    id: command
+    attributes:
+      label: Affected command or area
+      options:
+        - Authentication and token storage
+        - Credentials and local injection
+        - Agent registration or promotion
+        - Approvals or audit evidence
+        - MCP server management
+        - Configuration or project generation
+        - Packaging or installation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Explain the observed and expected behaviour.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: Provide the smallest redacted sequence that reproduces the problem.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted output
+      description: Optional. Remove tokens, credentials, signed URLs, and customer data.
+      render: shell
