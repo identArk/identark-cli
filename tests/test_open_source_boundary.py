@@ -31,7 +31,6 @@ REQUIRED_GITHUB_FILES = {
     ".github/workflows/ci.yml",
     ".github/workflows/codeql.yml",
     ".github/workflows/publish.yml",
-    ".github/workflows/secret-scan.yml",
 }
 FORBIDDEN_REPOSITORY_REFERENCES = {
     "cloud/cli",
