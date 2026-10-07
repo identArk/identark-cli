@@ -1,23 +1,27 @@
-"""
-HITL Approval commands
-"""
+"""Human approval commands."""
 
 from __future__ import annotations
 
 import json
 import time
-from typing import Any
 
 import typer
 from rich import box
-from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
 from identark_cli.core.auth import get_api_client
+from identark_cli.ui import console, error_console
+from identark_cli.ui.components import (
+    render_empty_state,
+    render_error,
+    render_success,
+    render_warning,
+)
+from identark_cli.ui.safety import redact_sensitive as _redact_sensitive
+from identark_cli.ui.safety import safe_rich_text as _safe_display_text
 
-console = Console()
-app = typer.Typer(help="HITL approval workflow")
+app = typer.Typer(help="Human approvals for sensitive operations")
 
 
 @app.command("list")
@@ -27,11 +31,11 @@ def list_approvals(
     """
     List approval requests
 
-    Shows pending HITL requests.
+    Shows sensitive operations waiting for human review.
     """
     try:
         if limit < 1 or limit > 100:
-            console.print("[red]--limit must be between 1 and 100[/red]")
+            render_error(error_console, "--limit must be between 1 and 100.")
             raise typer.Exit(2)
         with get_api_client() as client:
             response = client.get("/v1/mcp/approvals/pending")
@@ -39,12 +43,22 @@ def list_approvals(
             approvals = response.json()[:limit]
     except typer.Exit:
         raise
-    except Exception as e:
-        console.print(f"[red]Error fetching approvals:[/red] {e}")
+    except Exception:
+        render_error(
+            error_console,
+            "Could not load pending approvals.",
+            explanation="Check your connection and account permissions.",
+            next_step="identark auth status",
+        )
         raise typer.Exit(1) from None
 
     if not approvals:
-        console.print("No pending approvals")
+        render_empty_state(
+            console,
+            "No pending approvals",
+            "Sensitive agent operations that need your review will appear here.",
+            next_step="identark approvals watch",
+        )
         return
 
     table = Table(title=f"Pending Approvals ({len(approvals)})", box=box.ROUNDED)
@@ -55,7 +69,7 @@ def list_approvals(
     table.add_column("Age")
 
     for approval in approvals:
-        risk_score = approval.get("risk_score", 0)
+        risk_score = _coerce_risk_score(approval.get("risk_score"))
         risk_style = _risk_style(risk_score)
 
         # Calculate age
@@ -63,10 +77,10 @@ def list_approvals(
         age = _time_since(created)
 
         table.add_row(
-            approval["id"][:8],
-            approval.get("tool_name", "unknown"),
+            _safe_display_text(approval.get("id", "unknown"))[:8],
+            _safe_display_text(approval.get("tool_name", "unknown")),
             f"[{risk_style}]{risk_score}[/{risk_style}]",
-            approval.get("requested_by", "unknown"),
+            _safe_display_text(approval.get("requested_by", "unknown")),
             age,
         )
 
@@ -90,26 +104,34 @@ def inspect(
             response = client.get(f"/v1/mcp/approvals/{approval_id}")
             response.raise_for_status()
             approval = response.json()
-    except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
+    except Exception:
+        render_error(
+            error_console,
+            "Could not load this approval request.",
+            explanation="It may have expired, been decided, or be outside your access scope.",
+            next_step="identark approvals list",
+        )
         raise typer.Exit(1) from None
 
     # Build detail panel
-    risk_score = approval.get("risk_score", 0)
-    risk_level = approval.get("risk_level", "unknown")
+    risk_score = _coerce_risk_score(approval.get("risk_score"))
+    risk_level = _safe_display_text(approval.get("risk_level", "unknown"))
     risk_style = _risk_style(risk_score)
 
-    safe_arguments = json.dumps(_redact_sensitive(approval.get("tool_arguments", {})), indent=2)
+    safe_arguments = _safe_display_text(
+        json.dumps(_redact_sensitive(approval.get("tool_arguments", {})), indent=2),
+        max_length=4000,
+    )
     content = f"""
-[bold]Tool:[/bold]         {approval.get("tool_name", "unknown")}
-[bold]Status:[/bold]       {approval.get("status", "unknown")}
+[bold]Tool:[/bold]         {_safe_display_text(approval.get("tool_name", "unknown"))}
+[bold]Status:[/bold]       {_safe_display_text(approval.get("status", "unknown"))}
 [bold]Risk Score:[/bold]   [{risk_style}]{risk_score} ({risk_level})[/{risk_style}]
-[bold]Requested By:[/bold] {approval.get("requested_by", "unknown")}
-[bold]Created:[/bold]      {approval.get("created_at", "unknown")}
-[bold]Expires:[/bold]      {approval.get("expires_at", "unknown")}
+[bold]Requested By:[/bold] {_safe_display_text(approval.get("requested_by", "unknown"))}
+[bold]Created:[/bold]      {_safe_display_text(approval.get("created_at", "unknown"))}
+[bold]Expires:[/bold]      {_safe_display_text(approval.get("expires_at", "unknown"))}
 
 [bold]Risk Explanation:[/bold]
-{approval.get("risk_explanation", "No explanation available")}
+{_safe_display_text(approval.get("risk_explanation", "No explanation available"))}
 
 [bold]Tool Arguments:[/bold]
 ```json
@@ -117,12 +139,19 @@ def inspect(
 ```
     """
 
-    console.print(Panel(content, title=f"Approval Request: {approval_id}", border_style="cyan"))
+    console.print(
+        Panel(
+            content,
+            title=f"Approval Request: {_safe_display_text(approval_id)}",
+            border_style="cyan",
+        )
+    )
 
     if approval.get("status") == "pending":
         console.print("\n[bold]Actions:[/bold]")
-        console.print(f"  [cyan]identark approvals approve {approval_id}[/cyan]")
-        console.print(f"  [cyan]identark approvals reject {approval_id} --reason '...'[/cyan]")
+        safe_approval_id = _safe_display_text(approval_id)
+        console.print(f"  [cyan]identark approvals approve {safe_approval_id}[/cyan]")
+        console.print(f"  [cyan]identark approvals reject {safe_approval_id} --reason '...'[/cyan]")
 
 
 @app.command()
@@ -134,7 +163,7 @@ def approve(
     """
     Approve a pending request
 
-    Approves the HITL request and allows the agent to proceed.
+    Allows the reviewed agent operation to proceed.
     High-risk operations (>70) require MFA verification.
     """
     try:
@@ -145,8 +174,8 @@ def approve(
             approval = response.json()
 
             # Check if MFA required
-            if approval.get("risk_score", 0) >= 70 and not mfa_code:
-                console.print("[yellow]This operation requires MFA verification[/yellow]")
+            if _coerce_risk_score(approval.get("risk_score")) >= 70 and not mfa_code:
+                render_warning(console, "This operation requires MFA verification.")
                 mfa_code = typer.prompt("Enter MFA code", hide_input=True)
 
             # Submit approval
@@ -155,13 +184,18 @@ def approve(
             response = client.post(f"/v1/mcp/approvals/{approval_id}/decision", json=payload)
             response.raise_for_status()
 
-        console.print(f"[green]✓ Approved request {approval_id}[/green]")
+        render_success(console, f"Approved request {_safe_display_text(approval_id)}")
 
         if approval.get("tool_name"):
-            console.print(f"  Tool: [cyan]{approval['tool_name']}[/cyan]")
+            console.print(f"  Tool: [cyan]{_safe_display_text(approval['tool_name'])}[/cyan]")
 
-    except Exception as e:
-        console.print(f"[red]Approval failed:[/red] {e}")
+    except Exception:
+        render_error(
+            error_console,
+            "Could not approve this request.",
+            explanation="The request may have expired or require different authorization.",
+            next_step=f"identark approvals inspect {_safe_display_text(approval_id)}",
+        )
         raise typer.Exit(1) from None
 
 
@@ -173,8 +207,7 @@ def reject(
     """
     Reject a pending request
 
-    Rejects the HITL request and prevents the agent from
-    executing the operation.
+    Prevents the reviewed agent operation from running.
     """
     try:
         with get_api_client() as client:
@@ -183,11 +216,16 @@ def reject(
             response = client.post(f"/v1/mcp/approvals/{approval_id}/decision", json=payload)
             response.raise_for_status()
 
-        console.print(f"[yellow]✗ Rejected request {approval_id}[/yellow]")
-        console.print(f"  Reason: {reason}")
+        render_success(console, f"Rejected request {_safe_display_text(approval_id)}")
+        console.print("  Reason recorded; the operation will not run.")
 
-    except Exception as e:
-        console.print(f"[red]Rejection failed:[/red] {e}")
+    except Exception:
+        render_error(
+            error_console,
+            "Could not reject this request.",
+            explanation="The request may have expired or already been decided.",
+            next_step=f"identark approvals inspect {_safe_display_text(approval_id)}",
+        )
         raise typer.Exit(1) from None
 
 
@@ -198,7 +236,7 @@ def watch(
     """
     Watch approvals in real-time
 
-    Monitor HITL requests as they arrive. Use approve, reject, or inspect
+    Monitor approval requests as they arrive. Use approve, reject, or inspect
     from another terminal to act on a request.
     """
     if refresh < 1:
@@ -215,8 +253,12 @@ def watch(
                     response = client.get("/v1/mcp/approvals/pending")
                     response.raise_for_status()
                     approvals = response.json()[:10]
-            except Exception as e:
-                console.print(f"[red]Error:[/red] {e}")
+            except Exception:
+                render_warning(
+                    console,
+                    "Could not refresh approvals.",
+                    next_step="Check your connection or press Ctrl+C to stop",
+                )
                 time.sleep(refresh)
                 continue
 
@@ -227,14 +269,14 @@ def watch(
                 table.add_row("[dim]No pending approvals[/dim]")
                 console.print(table)
             else:
-                table = Table(title=f"🔄 {len(approvals)} Pending", box=box.ROUNDED)
+                table = Table(title=f"{len(approvals)} Pending Approvals", box=box.ROUNDED)
                 table.add_column("ID", style="cyan")
                 table.add_column("Tool")
                 table.add_column("Risk", justify="right")
                 table.add_column("Action Required")
 
                 for approval in approvals:
-                    risk = approval.get("risk_score", 0)
+                    risk = _coerce_risk_score(approval.get("risk_score"))
                     risk_style = _risk_style(risk)
 
                     if risk >= 70:
@@ -243,8 +285,8 @@ def watch(
                         action = "[yellow]Review needed[/yellow]"
 
                     table.add_row(
-                        approval["id"][:8],
-                        approval.get("tool_name", "unknown")[:30],
+                        _safe_display_text(approval.get("id", "unknown"))[:8],
+                        _safe_display_text(approval.get("tool_name", "unknown"), max_length=30),
                         f"[{risk_style}]{risk}[/{risk_style}]",
                         action,
                     )
@@ -261,6 +303,19 @@ def watch(
 
     except KeyboardInterrupt:
         console.print("\n[dim]Stopped watching[/dim]")
+
+
+def _coerce_risk_score(value: object) -> int:
+    """Normalize untrusted API risk values for display and policy hints."""
+    if isinstance(value, bool):
+        return 0
+    if not isinstance(value, (int, float, str)):
+        return 0
+    try:
+        score = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return max(0, min(score, 100))
 
 
 def _risk_style(score: int) -> str:
@@ -291,31 +346,3 @@ def _time_since(iso_timestamp: str) -> str:
             return "just now"
     except (TypeError, ValueError):
         return "unknown"
-
-
-_SENSITIVE_KEY_PARTS = (
-    "api_key",
-    "apikey",
-    "authorization",
-    "credential",
-    "password",
-    "private_key",
-    "secret",
-    "token",
-)
-
-
-def _redact_sensitive(value: Any) -> Any:
-    """Return a display-safe copy of nested tool arguments."""
-    if isinstance(value, dict):
-        return {
-            key: (
-                "*** REDACTED ***"
-                if any(part in str(key).lower() for part in _SENSITIVE_KEY_PARTS)
-                else _redact_sensitive(item)
-            )
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [_redact_sensitive(item) for item in value]
-    return value

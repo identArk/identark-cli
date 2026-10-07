@@ -6,14 +6,14 @@ import json
 from pathlib import Path
 
 import typer
-from rich.console import Console
 from rich.table import Table
 
 from identark_cli.core.audit_evidence import AuditEvidenceError, verify_evidence_bundle
 from identark_cli.core.auth import get_api_client
+from identark_cli.ui import console, error_console
+from identark_cli.ui.components import render_empty_state, render_error, render_success
 
-console = Console()
-app = typer.Typer(help="Read the authoritative control-plane audit trail")
+app = typer.Typer(help="Governed history and verifiable evidence")
 
 
 @app.command("list")
@@ -31,17 +31,26 @@ def list_audit_records(
             response = client.get("/v1/audit", params={"limit": limit})
             response.raise_for_status()
             payload = response.json()
-    except Exception as exc:
-        console.print(f"[red]Could not load audit trail:[/red] {exc}")
+    except Exception:
+        render_error(
+            error_console,
+            "Could not load governed history.",
+            explanation="Check your connection and account permissions.",
+            next_step="identark auth status",
+        )
         raise typer.Exit(1) from None
 
     entries = payload.get("entries", []) if isinstance(payload, dict) else []
     if not entries:
-        console.print("[dim]No governed activity yet.[/dim]")
-        console.print("Run your agent in Gateway Mode, then try again.")
+        render_empty_state(
+            console,
+            "No governed activity yet",
+            "Actions appear here after an agent runs in Gateway Mode.",
+            next_step="identark status",
+        )
         return
 
-    table = Table(title="IdentArk audit trail (control plane)")
+    table = Table(title="Governed activity history")
     table.add_column("When", style="dim")
     table.add_column("Operation", style="cyan")
     table.add_column("Result")
@@ -71,7 +80,7 @@ def export_audit_evidence(
         help="Evidence format: v1 (approval chain) or v2 (risk and policy decision evidence)",
     ),
 ) -> None:
-    """Export non-secret HITL decision evidence for independent review.
+    """Export non-secret human-approval evidence for independent review.
 
     The bundle contains the fields protected by the approval hash chain, never
     tool arguments, prompts, outputs, credentials, or capability tokens.
@@ -103,7 +112,7 @@ def export_audit_evidence(
         )
         raise typer.Exit(1) from None
 
-    console.print("[green]✓ Approval evidence exported[/green]")
+    render_success(console, "Approval evidence exported")
     console.print(f"  File: [cyan]{output}[/cyan]")
     console.print(f"  Records: {verification.records_checked}")
     console.print(f"  Verify offline: [cyan]identark audit verify {output}[/cyan]")
@@ -143,7 +152,7 @@ def verify_audit_evidence(
         console.print(f"  Reason: {verification.failure_reason}")
         raise typer.Exit(1)
 
-    console.print("[green]✓ Evidence integrity verified[/green]")
+    render_success(console, "Evidence integrity verified")
     console.print(f"  Records checked: {verification.records_checked}")
     console.print(f"  Chain head: {verification.head_hash or 'empty chain'}")
     console.print(

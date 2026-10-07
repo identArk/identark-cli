@@ -5,13 +5,19 @@ Authentication commands for IdentArk CLI
 from __future__ import annotations
 
 import typer
-from rich.console import Console
-from rich.table import Table
 
 from identark_cli.core.auth import get_auth_status, login, logout
+from identark_cli.ui import console, error_console
+from identark_cli.ui.components import (
+    StatusRow,
+    render_context_summary,
+    render_empty_state,
+    render_error,
+    render_security_note,
+    render_success,
+)
 
-console = Console()
-app = typer.Typer(help="Authentication and login")
+app = typer.Typer(help="Account connection and secure sessions")
 
 
 @app.command("login")
@@ -29,8 +35,13 @@ def login_cmd(
     """
     try:
         login(api_url=api_url, browser=not no_browser)
-    except Exception as e:
-        console.print(f"[red]Login failed:[/red] {e}")
+    except Exception:
+        render_error(
+            error_console,
+            "Could not connect your account.",
+            explanation="The authorization session did not complete.",
+            next_step="identark auth login --no-browser",
+        )
         raise typer.Exit(1) from None
 
 
@@ -54,8 +65,12 @@ def logout_cmd(
 
     try:
         logout()
-    except Exception as e:
-        console.print(f"[red]Logout failed:[/red] {e}")
+    except Exception:
+        render_error(
+            error_console,
+            "Could not clear the local session.",
+            explanation="Check access to your OS keychain and IdentArk configuration directory.",
+        )
         raise typer.Exit(1) from None
 
 
@@ -68,26 +83,24 @@ def status() -> None:
     """
     status = get_auth_status()
 
-    table = Table(title="Authentication Status")
-    table.add_column("Property", style="cyan")
-    table.add_column("Value")
-
     if status.authenticated:
-        table.add_row("Status", "[green]✓ Authenticated[/green]")
-        table.add_row("Email", status.email or "Unknown")
-        table.add_row("Organization", status.org_name or "Unknown")
-        table.add_row("User ID", status.user_id or "Unknown")
-        table.add_row("Source", status.source)
-        table.add_row("Verified", "Yes" if status.verified else "No")
+        render_context_summary(
+            console,
+            [
+                StatusRow("Account", status.email or "Connected", "active"),
+                StatusRow("Organization", status.org_name or "Not selected"),
+                StatusRow("Session", "Verified" if status.verified else "Available", "active"),
+                StatusRow("Source", status.source),
+            ],
+        )
+        render_security_note(console, "Raw session tokens are never displayed by IdentArk CLI.")
     else:
-        table.add_row("Status", "[red]✗ Not authenticated[/red]")
-        table.add_row("Email", "-")
-        table.add_row("Organization", "-")
-
-    console.print(table)
-
-    if not status.authenticated:
-        console.print("\nRun [cyan]identark auth login[/cyan] to authenticate")
+        render_empty_state(
+            console,
+            "Account not connected",
+            "Connect your account to manage production agents and approvals.",
+            next_step="identark auth login",
+        )
 
 
 @app.command()
@@ -104,7 +117,7 @@ def token() -> None:
     try:
         get_access_token()
         status = get_auth_status()
-        console.print("[green]✓ Authentication token is configured[/green]")
+        render_success(console, "Secure session is available")
         console.print(f"Source: {status.source}")
         console.print(f"Verified: {'yes' if status.verified else 'not by this command'}")
         storage = (
@@ -114,6 +127,10 @@ def token() -> None:
         )
         console.print(f"Stored in: {storage}")
         console.print("[dim]Raw tokens are never displayed by IdentArk CLI.[/dim]")
-    except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
+    except Exception:
+        render_error(
+            error_console,
+            "No usable secure session was found.",
+            next_step="identark auth login",
+        )
         raise typer.Exit(1) from None

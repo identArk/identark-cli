@@ -56,6 +56,19 @@ def test_global_api_url_requires_https_except_localhost() -> None:
         GlobalConfig(api_url="http://api.identark.io")
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://user:password@api.identark.io",
+        "https://api.identark.io?token=secret",
+        "https://api.identark.io#credential",
+    ],
+)
+def test_global_api_url_rejects_secret_bearing_components(url: str) -> None:
+    with pytest.raises(ValidationError):
+        GlobalConfig(api_url=url)
+
+
 def test_init_does_not_install_or_overwrite_git_hook(tmp_path: Path) -> None:
     project = tmp_path / "project"
     hooks = project / ".git" / "hooks"

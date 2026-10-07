@@ -6,19 +6,26 @@ IdentArk CLI - Main entry point
 from __future__ import annotations
 
 import typer
-from rich.console import Console
-from rich.panel import Panel
 from rich.table import Table
-from rich.text import Text
 
 from identark_cli import __version__
 from identark_cli.commands import agent, approvals, audit, auth, config, credential, mcp, promote
+from identark_cli.commands.execute import execute
 from identark_cli.core.activity import ActivityRecordError, read_local_activity
-from identark_cli.core.config import get_project_root
+from identark_cli.core.auth import get_auth_status
+from identark_cli.core.config import ProjectConfig, get_project_root, load_config
 from identark_cli.core.init import FirstRunProvider
-
-# Rich console for pretty output
-console = Console()
+from identark_cli.ui import configure_console, console, error_console
+from identark_cli.ui.components import (
+    StatusRow,
+    render_context_summary,
+    render_error,
+    render_header,
+    render_next_steps,
+    render_security_note,
+    render_success,
+)
+from identark_cli.ui.context import build_home_context
 
 # Create the main app
 app = typer.Typer(
@@ -26,52 +33,82 @@ app = typer.Typer(
     help="IdentArk CLI - credential references, approvals, and managed access",
     add_completion=True,
     rich_markup_mode="rich",
-    no_args_is_help=True,
+    no_args_is_help=False,
 )
-
-# Add subcommands
-app.add_typer(auth.app, name="auth", help="Authentication and login")
-app.add_typer(agent.app, name="agent", help="Agent scaffolding, registration, and local execution")
-app.add_typer(
-    credential.app,
-    name="credential",
-    help="Credential references, scanning, and local injection",
-)
-app.add_typer(approvals.app, name="approvals", help="HITL approval workflow")
-app.add_typer(audit.app, name="audit", help="Authoritative control-plane audit trail")
-app.command("promote")(promote.promote)
-app.add_typer(mcp.app, name="mcp", help="MCP server management")
-app.add_typer(config.app, name="config", help="Configuration management")
 
 
 @app.callback(invoke_without_command=True)
 def main(
+    ctx: typer.Context,
     version: bool | None = typer.Option(
         None, "--version", "-v", help="Show version and exit", is_eager=True
     ),
+    no_color: bool = typer.Option(
+        False,
+        "--no-color",
+        help="Disable color output (also honors NO_COLOR and TERM=dumb)",
+    ),
 ) -> None:
     """
-    IdentArk CLI - Secure AI agent access management
+    Secure access for production AI agents.
 
-    Run local development processes with short-lived credential injection,
-    manage references, and review high-risk operations from your terminal.
+    Start locally, then move to Gateway Mode without placing provider
+    credentials inside your production agent.
 
     [bold]Quick start:[/bold]
 
-    $ identark auth login              # Authenticate with IdentArk
+    $ identark auth login              # Connect your account
 
     $ identark agent init --name demo  # Initialize agent project
 
-    $ identark credential scan         # Scan for secrets in code
+    $ identark credential scan         # Scan local code for secrets
 
     $ identark agent run ./my_agent.py # Run with local credential injection
     """
+    configure_console(no_color=no_color)
     if version:
         console.print(f"identark version {__version__}")
         raise typer.Exit()
+    if ctx.invoked_subcommand is None:
+        _render_home()
 
 
-@app.command()
+def _load_project_for_home() -> tuple[ProjectConfig | None, str | None]:
+    """Load presentation-safe project state without treating absence as an error."""
+    root = get_project_root()
+    if root is None:
+        return None, None
+    try:
+        return load_config(root / ".identark" / "config.toml"), root.name
+    except Exception:
+        return None, root.name
+
+
+def _render_home(*, detailed: bool = False) -> None:
+    """Render a contextual landing screen for the current directory."""
+    auth_status = get_auth_status()
+    project, directory_name = _load_project_for_home()
+    home = build_home_context(auth_status, project, project_directory_name=directory_name)
+
+    render_header(console, version=__version__)
+    rows = list(home.rows)
+    if detailed and project is not None:
+        rows.append(StatusRow("References", str(len(project.credentials))))
+        if project.gateway_mode and project.gateway_mode.capability_expires_at:
+            rows.append(
+                StatusRow(
+                    "Capability",
+                    f"Expires {project.gateway_mode.capability_expires_at}",
+                    "attention",
+                )
+            )
+    render_context_summary(console, rows)
+    render_next_steps(console, home.steps, title="Get started" if project is None else "Next steps")
+    render_security_note(console, home.security_note)
+    console.print()
+
+
+@app.command(rich_help_panel="Get started")
 def init(
     path: str = typer.Option(".", "--path", "-p", help="Path to initialize"),
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing configuration"),
@@ -88,7 +125,7 @@ def init(
 
     try:
         setup = initialize_project(path, force=force, provider=provider)
-        console.print(f"✓ Initialized IdentArk in [bold]{path}[/bold]")
+        render_success(console, f"Initialized IdentArk in {path}")
         if setup:
             console.print("\n[bold]First run — local development only:[/bold]")
             console.print(f"  1. Install: {setup.install_command}")
@@ -109,12 +146,17 @@ def init(
         console.print("  2. Run: identark credential add <name>")
         console.print("  3. Optional: identark credential install-hook")
         console.print("  4. Run: identark agent run <script.py>")
-    except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
+    except Exception:
+        render_error(
+            error_console,
+            "Could not initialize this project.",
+            explanation="The path may be unavailable or an existing configuration may need review.",
+            next_step="identark init --help",
+        )
         raise typer.Exit(1) from None
 
 
-@app.command("trail")
+@app.command("trail", rich_help_panel="Build")
 def activity_trail(
     limit: int = typer.Option(10, "--limit", "-n", min=1, max=200, help="Local records to show"),
 ) -> None:
@@ -147,56 +189,62 @@ def activity_trail(
         )
     console.print(table)
     console.print(
-        "[dim]Verified local record. This is not the control-plane audit trail; "
+        "[dim]Verified local record. This is not governed history; "
         "use `identark audit list` after Gateway Mode is configured.[/dim]"
     )
 
 
-@app.command()
+@app.command(rich_help_panel="Get started")
 def status() -> None:
     """
     Show IdentArk status and configuration
 
     Displays current authentication status and configured credential references.
     """
-    from identark_cli.core.auth import get_auth_status
-    from identark_cli.core.config import load_config
+    _render_home(detailed=True)
 
-    # Title
-    console.print()
-    console.print(
-        Panel.fit(
-            Text("IdentArk CLI", style="bold cyan") + Text(f" v{__version__}", style="dim"),
-            border_style="cyan",
-        )
-    )
 
-    # Auth status
-    auth_status = get_auth_status()
-    console.print("\n[bold]Authentication:[/bold]")
-    if auth_status.authenticated:
-        if auth_status.email:
-            console.print(f"  ✓ Logged in as [green]{auth_status.email}[/green]")
-        else:
-            console.print(f"  ✓ Authenticated via [green]{auth_status.source}[/green]")
-        if auth_status.org_name:
-            console.print(f"  Organization: {auth_status.org_name}")
-    else:
-        console.print("  ✗ Not authenticated")
-        console.print("    Run: [cyan]identark auth login[/cyan]")
-
-    # Config
-    try:
-        config = load_config()
-        console.print("\n[bold]Configuration:[/bold]")
-        console.print(f"  Project: {config.project_name or 'Not configured'}")
-        console.print(f"  Credentials: {len(config.credentials)}")
-    except Exception:
-        console.print("\n[bold]Configuration:[/bold]")
-        console.print("  No project configured")
-        console.print("    Run: [cyan]identark init[/cyan]")
-
-    console.print()
+# Register grouped command families after the first-class onboarding commands
+# so Typer renders "Get started" before advanced sections.
+app.command("promote", rich_help_panel="Build")(promote.promote)
+app.add_typer(
+    agent.app,
+    name="agent",
+    help="Agent scaffolding, registration, and local execution",
+    rich_help_panel="Build",
+)
+app.add_typer(
+    credential.app,
+    name="credential",
+    help="Credential references, scanning, and local injection",
+    rich_help_panel="Build",
+)
+app.command("exec", rich_help_panel="Govern")(execute)
+app.add_typer(
+    auth.app,
+    name="auth",
+    help="Account connection and secure sessions",
+    rich_help_panel="Account",
+)
+app.add_typer(
+    config.app,
+    name="config",
+    help="Configuration management",
+    rich_help_panel="Account",
+)
+app.add_typer(
+    approvals.app,
+    name="approvals",
+    help="Human approvals for sensitive operations",
+    rich_help_panel="Govern",
+)
+app.add_typer(
+    audit.app,
+    name="audit",
+    help="Governed history and verifiable evidence",
+    rich_help_panel="Govern",
+)
+app.add_typer(mcp.app, name="mcp", help="MCP server management", rich_help_panel="Govern")
 
 
 # Entry point for `python -m identark_cli`

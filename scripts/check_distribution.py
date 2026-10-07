@@ -60,7 +60,7 @@ SDIST_ROOT_FILES = {
     "SUPPORT.md",
     "pyproject.toml",
 }
-SDIST_ROOT_DIRS = {"identark_cli", "scripts", "tests"}
+SDIST_ROOT_DIRS = {"docs", "identark_cli", "scripts", "tests"}
 
 
 class BoundaryViolationError(Exception):
