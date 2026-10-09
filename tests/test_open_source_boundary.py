@@ -78,6 +78,7 @@ def test_build_configuration_explicitly_allowlists_public_files() -> None:
         "/scripts",
         "/SUPPORT.md",
         "/CONTRIBUTING.md",
+        "/docs",
         "/pyproject.toml",
     }
 
@@ -109,6 +110,7 @@ def test_public_docs_do_not_point_contributors_at_private_repositories() -> None
         CLI_ROOT / "CONTRIBUTING.md",
         CLI_ROOT / "RELEASING.md",
         CLI_ROOT / "SUPPORT.md",
+        CLI_ROOT / "docs" / "TERMINAL_UX.md",
     ]
     violations: list[str] = []
     for path in public_docs:

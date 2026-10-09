@@ -3,15 +3,21 @@
 The command-line client for IdentArk credential references, agent registration,
 human approval workflows, and local development injection.
 
-> Release status: alpha. The package is prepared for `identark-cli` on PyPI but
-> has not been published yet. Install it from this repository until the first
-> trusted-publishing release completes.
+> Release status: alpha. Version `0.1.0` is published on PyPI. The package is
+> intended for early adopters and may change before a stable release.
 
 ## Requirements
 
 - Python 3.11 or newer
 - An IdentArk account or scoped `csk_` API key
 - An OS keychain for device-login tokens, when available
+
+## Install from PyPI
+
+```bash
+python -m pip install identark-cli
+identark --version
+```
 
 ## Install from source
 
@@ -22,11 +28,28 @@ python -m pip install -e .
 identark --version
 ```
 
-After the first release:
+## Terminal experience
+
+Run `identark` without arguments for a concise view of the current account,
+project, operating mode, and the next useful commands:
 
 ```bash
-python -m pip install identark-cli
+identark
+identark status
 ```
+
+The interface adapts to narrow terminals and uses semantic color only. Disable
+color explicitly—or through the standard environment convention—when piping
+output or using an assistive terminal:
+
+```bash
+identark --no-color status
+NO_COLOR=1 identark status
+```
+
+The current commands are human-readable. Scripts should rely on exit codes,
+not parse the styled text output; a stable machine-readable contract will be
+introduced separately.
 
 ## Authenticate
 
@@ -80,10 +103,10 @@ writes a hash-linked, privacy-preserving local activity record at
 estimated cost—never prompts, model output, credential values, references, or
 exception text. The file is ignored by Git.
 
-This is intentionally **not** the control-plane audit trail: local development
+This is intentionally **not** governed history: local development
 places the provider key in the sample process for that process lifetime. When
 you move to Gateway Mode, the agent receives a scoped IdentArk token instead of
-the provider credential. Inspect the resulting authoritative audit records with:
+the provider credential. Inspect the resulting authoritative history with:
 
 ```bash
 identark audit list
@@ -133,7 +156,7 @@ mint a fresh short-lived capability when needed.
 
 ### Export approval evidence for an independent reviewer
 
-After a governed workflow has produced HITL decisions, a human with an
+After a governed workflow has produced human-approval decisions, a human with an
 IdentArk login can export the decision chain and give the resulting file to an
 auditor or customer. The reviewer does not need IdentArk access to verify it:
 
@@ -233,8 +256,30 @@ environment injection.
 
 The `trail` command verifies the hash-linked local development record. It is
 useful for confirming a first run without exposing sensitive content, but it is
-not compliance evidence. `audit list` reads the append-only control-plane audit
-log and shows only activity that actually passed through a governed route.
+not compliance evidence. `audit list` reads the append-only governed history
+and shows only activity that actually passed through a governed route.
+
+## Governed execution
+
+`identark exec` gives local agents a JSON interface to the capability gateway.
+It requires an agent-bound API key; an interactive administrator login is not
+accepted as an agent identity. Provider credentials remain on the control
+plane.
+
+```bash
+export IDENTARK_API_KEY=csk_scoped_agent_key
+
+identark exec source_control.issues.read \
+  --provider github \
+  --resource OWNER/PRIVATE_REPOSITORY \
+  --json
+```
+
+Standard exit codes are `0` for success, `2` for invalid input, `3` for a
+policy denial, `4` for an operation still pending approval, and `5` for an
+execution or transport failure. Reuse `--idempotency-key` when retrying an
+uncertain request. `--wait` polls the existing execution; it does not resubmit
+the provider action.
 
 ## Human approvals
 

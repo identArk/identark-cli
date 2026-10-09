@@ -9,14 +9,15 @@ from enum import StrEnum
 from urllib.parse import urlparse
 
 import typer
-from rich.console import Console
 from rich.json import JSON
 from rich.panel import Panel
 from rich.table import Table
 
 from identark_cli.core.auth import get_api_client
+from identark_cli.ui import console, error_console
+from identark_cli.ui.components import render_empty_state, render_error, render_success
+from identark_cli.ui.safety import redact_sensitive, safe_rich_text
 
-console = Console()
 app = typer.Typer(help="MCP server management")
 
 
@@ -49,13 +50,22 @@ def list_servers() -> None:
             response.raise_for_status()
             data = response.json()
             servers = data.get("servers", [])
-    except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
+    except Exception:
+        render_error(
+            error_console,
+            "Could not load MCP servers.",
+            explanation="Check your connection and account permissions.",
+            next_step="identark auth status",
+        )
         raise typer.Exit(1) from None
 
     if not servers:
-        console.print("No MCP servers registered")
-        console.print("Run: [cyan]identark mcp server add[/cyan]")
+        render_empty_state(
+            console,
+            "No MCP servers registered",
+            "Register a public HTTPS endpoint before assigning tools to agents.",
+            next_step="identark mcp server add",
+        )
         return
 
     table = Table(title="MCP Servers")
@@ -71,10 +81,10 @@ def list_servers() -> None:
         status_style = "green" if status == "active" else "yellow"
 
         table.add_row(
-            server["id"][:8],
-            server["name"],
-            server.get("transport_type", "unknown"),
-            f"[{status_style}]{status}[/{status_style}]",
+            safe_rich_text(server.get("id", "unknown"))[:8],
+            safe_rich_text(server.get("name", "unknown")),
+            safe_rich_text(server.get("transport_type", "unknown")),
+            f"[{status_style}]{safe_rich_text(status)}[/{status_style}]",
             str(tools_count),
         )
 
@@ -94,13 +104,25 @@ def add_server(
     """
     Register a new MCP server
 
-    Adds an unauthenticated HTTPS MCP endpoint for agents to use with HITL
+    Adds an unauthenticated HTTPS MCP endpoint for agents to use with human
     approval policies. Authenticated MCP registration is intentionally kept
     in the dashboard until the API accepts vault references instead of values.
     """
     parsed_endpoint = urlparse(endpoint)
     if parsed_endpoint.scheme != "https" or not parsed_endpoint.hostname:
         console.print("[red]MCP endpoints must use an absolute HTTPS URL[/red]")
+        raise typer.Exit(2)
+    if (
+        parsed_endpoint.username
+        or parsed_endpoint.password
+        or parsed_endpoint.query
+        or parsed_endpoint.fragment
+    ):
+        render_error(
+            error_console,
+            "MCP endpoint URLs cannot contain credentials, query parameters, or fragments.",
+            explanation="Register a stable HTTPS endpoint; keep authentication in IdentArk.",
+        )
         raise typer.Exit(2)
     if parsed_endpoint.hostname in {"localhost", "127.0.0.1", "::1"}:
         console.print("[red]Local MCP endpoints cannot be reached by the IdentArk cloud[/red]")
@@ -119,11 +141,15 @@ def add_server(
             response.raise_for_status()
             server = response.json()
 
-        console.print(f"[green]✓ Registered MCP server:[/green] {name}")
-        console.print(f"  ID: [cyan]{server['id']}[/cyan]")
+        render_success(console, f"Registered MCP server {safe_rich_text(name)}")
+        console.print(f"  ID: [cyan]{safe_rich_text(server.get('id', 'unknown'))}[/cyan]")
 
-    except Exception as e:
-        console.print(f"[red]Failed to register server:[/red] {e}")
+    except Exception:
+        render_error(
+            error_console,
+            "Could not register this MCP server.",
+            explanation="Check the endpoint, account permissions, and server availability.",
+        )
         raise typer.Exit(1) from None
 
 
@@ -135,7 +161,7 @@ def remove_server(
     """
     Remove an MCP server
 
-    Unregisters the server. Existing HITL policies referencing
+    Unregisters the server. Existing human-approval policies referencing
     this server will be deactivated.
     """
     if not force:
@@ -149,10 +175,14 @@ def remove_server(
             response = client.delete(f"/v1/mcp/servers/{server_id}")
             response.raise_for_status()
 
-        console.print(f"[green]✓ Removed MCP server[/green] {server_id}")
+        render_success(console, f"Removed MCP server {safe_rich_text(server_id)}")
 
-    except Exception as e:
-        console.print(f"[red]Failed to remove server:[/red] {e}")
+    except Exception:
+        render_error(
+            error_console,
+            "Could not remove this MCP server.",
+            explanation="It may no longer exist or be outside your access scope.",
+        )
         raise typer.Exit(1) from None
 
 
@@ -170,20 +200,26 @@ def show_server(
             response = client.get(f"/v1/mcp/servers/{server_id}")
             response.raise_for_status()
             server = response.json()
-    except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
+    except Exception:
+        render_error(
+            error_console,
+            "Could not load this MCP server.",
+            next_step="identark mcp server list",
+        )
         raise typer.Exit(1) from None
 
     # Build details panel
     content = f"""
-[bold]Name:[/bold]           {server.get("name")}
-[bold]Endpoint:[/bold]       {server.get("endpoint_url")}
-[bold]Transport:[/bold]      {server.get("transport_type")}
-[bold]Status:[/bold]         {server.get("status")}
+[bold]Name:[/bold]           {safe_rich_text(server.get("name"))}
+[bold]Endpoint:[/bold]       {safe_rich_text(server.get("endpoint_url"))}
+[bold]Transport:[/bold]      {safe_rich_text(server.get("transport_type"))}
+[bold]Status:[/bold]         {safe_rich_text(server.get("status"))}
 [bold]Recorded Tools:[/bold]  {len(server.get("tools", []))}
     """
 
-    console.print(Panel(content, title=f"MCP Server: {server_id}", border_style="cyan"))
+    console.print(
+        Panel(content, title=f"MCP Server: {safe_rich_text(server_id)}", border_style="cyan")
+    )
 
     # Show tools if available
     if server.get("tools"):
@@ -193,7 +229,10 @@ def show_server(
         tools_table.add_column("Description")
 
         for tool in server["tools"][:10]:  # Show first 10
-            tools_table.add_row(tool.get("name", "unknown"), tool.get("description", "")[:50])
+            tools_table.add_row(
+                safe_rich_text(tool.get("name", "unknown")),
+                safe_rich_text(tool.get("description", ""), max_length=50),
+            )
 
         console.print(tools_table)
 
@@ -212,22 +251,33 @@ def list_tools(
             response = client.get(f"/v1/mcp/servers/{server_id}")
             response.raise_for_status()
             server = response.json()
-    except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
+    except Exception:
+        render_error(
+            error_console,
+            "Could not load tools for this MCP server.",
+            next_step="identark mcp server list",
+        )
         raise typer.Exit(1) from None
 
     tools = server.get("tools", [])
 
     if not tools:
-        console.print("No tools are recorded for this server")
+        render_empty_state(
+            console,
+            "No tools recorded for this server",
+            "Tools appear after the service records them through the governed MCP path.",
+        )
         return
 
-    table = Table(title=f"Tools on {server.get('name', server_id)}")
+    table = Table(title=f"Tools on {safe_rich_text(server.get('name', server_id))}")
     table.add_column("Name", style="cyan")
     table.add_column("Description")
 
     for tool in tools:
-        table.add_row(tool.get("name", "unknown"), tool.get("description", "No description")[:60])
+        table.add_row(
+            safe_rich_text(tool.get("name", "unknown")),
+            safe_rich_text(tool.get("description", "No description"), max_length=60),
+        )
 
     console.print(table)
 
@@ -241,8 +291,8 @@ def execute_tool(
     """
     Execute an MCP tool
 
-    Executes a tool through the MCP Gateway with HITL.
-    High-risk operations will require approval.
+    Executes a tool through the MCP Gateway. High-risk operations require
+    human approval.
     """
     # Parse arguments
     args = {}
@@ -266,9 +316,14 @@ def execute_tool(
                 response.raise_for_status()
                 result = response.json()
 
-        console.print("[green]✓ Tool executed successfully[/green]")
-        console.print(JSON(json.dumps(result, indent=2)))
+        render_success(console, "Tool executed successfully")
+        console.print(JSON(json.dumps(redact_sensitive(result), indent=2)))
 
-    except Exception as e:
-        console.print(f"[red]Execution failed:[/red] {e}")
+    except Exception:
+        render_error(
+            error_console,
+            "Could not execute this MCP tool.",
+            explanation="The request may require human approval or different permissions.",
+            next_step="identark approvals list",
+        )
         raise typer.Exit(1) from None

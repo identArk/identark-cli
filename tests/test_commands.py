@@ -99,6 +99,16 @@ def test_agent_init_output_runs_from_generated_src_entrypoint(
     assert "credential injection" in executed.output
 
 
+def test_agent_init_rejects_path_like_name_before_writing(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        ["agent", "init", "--name", "../outside", "--path", str(tmp_path)],
+    )
+
+    assert result.exit_code == 2
+    assert not (tmp_path.parent / "outside").exists()
+
+
 def test_agent_run_rejects_missing_explicit_entrypoint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -166,7 +176,7 @@ def test_audit_list_uses_control_plane_audit_endpoint(monkeypatch: pytest.Monkey
     assert result.exit_code == 0, result.output
     assert client.calls[0][:2] == ("GET", "/v1/audit")
     assert client.calls[0][2]["params"] == {"limit": 1}
-    assert "control plane" in result.output
+    assert "Governed activity history" in result.output
 
 
 def _evidence_bundle() -> dict[str, Any]:
@@ -471,6 +481,39 @@ def test_mcp_add_never_sends_auth_values(monkeypatch: pytest.MonkeyPatch) -> Non
     assert client.calls[0][2]["json"]["auth_config"] == {}
 
 
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "https://user:password@mcp.example.com/rpc",
+        "https://mcp.example.com/rpc?token=secret",
+        "https://mcp.example.com/rpc#credential",
+    ],
+)
+def test_mcp_add_rejects_secret_bearing_url_components(
+    endpoint: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = FakeClient([])
+    monkeypatch.setattr(mcp, "get_api_client", lambda: client)
+
+    result = runner.invoke(
+        app,
+        [
+            "mcp",
+            "server",
+            "add",
+            "--name",
+            "public-mcp",
+            "--endpoint",
+            endpoint,
+            "--transport",
+            "streamable_http",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert client.calls == []
+
+
 def test_approval_inspect_redacts_secrets_from_output(monkeypatch: pytest.MonkeyPatch) -> None:
     client = FakeClient(
         [
@@ -494,6 +537,60 @@ def test_approval_inspect_redacts_secrets_from_output(monkeypatch: pytest.Monkey
     assert "never-print-this" not in result.output
     assert "REDACTED" in result.output
     assert "select 1" in result.output
+
+
+def test_approval_inspect_redacts_secret_shaped_risk_explanation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "csk_abcdefghijklmnopqrstuvwxyz123456"
+    client = FakeClient(
+        [
+            FakeResponse(
+                {
+                    "id": "approval-id",
+                    "tool_name": "query",
+                    "status": "pending",
+                    "risk_score": 80,
+                    "risk_level": "high",
+                    "risk_explanation": f"Injected explanation: Bearer {secret}",
+                    "tool_arguments": {},
+                }
+            )
+        ]
+    )
+    monkeypatch.setattr(approvals, "get_api_client", lambda: client)
+
+    result = runner.invoke(app, ["approvals", "inspect", "approval-id"])
+
+    assert result.exit_code == 0, result.output
+    assert secret not in result.output
+    assert "REDACTED" in result.output
+
+
+def test_mcp_tool_output_is_redacted_before_display(monkeypatch: pytest.MonkeyPatch) -> None:
+    secret = "csk_abcdefghijklmnopqrstuvwxyz123456"
+    client = FakeClient(
+        [
+            FakeResponse(
+                {
+                    "status": "ok",
+                    "password": "never-display",
+                    "message": f"Authorization: Bearer {secret}",
+                }
+            )
+        ]
+    )
+    monkeypatch.setattr(mcp, "get_api_client", lambda: client)
+
+    result = runner.invoke(
+        app,
+        ["mcp", "tool", "execute", "--server", "server-1", "--tool", "query"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert secret not in result.output
+    assert "never-display" not in result.output
+    assert "REDACTED" in result.output
 
 
 def test_structured_credential_cannot_be_injected_as_environment_variable(
@@ -553,6 +650,20 @@ def test_credential_connect_never_echoes_key_when_server_error_is_leaky(
     assert result.exit_code == 1
     assert secret not in result.output
     assert "Credential could not be connected" in result.output
+
+
+def test_credential_connect_rejects_unsafe_returned_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "csk_server_value_must_not_render"
+    client = FakeClient([FakeResponse({"credential_ref": f"secret/org/provider; echo {secret}"})])
+    monkeypatch.setattr(credential, "get_api_client", lambda: client)
+
+    result = runner.invoke(app, ["credential", "connect", "openai"], input="key\nkey\n")
+
+    assert result.exit_code == 1
+    assert secret not in result.output
+    assert "safe credential reference" in result.output
 
 
 def test_credential_connect_rejects_unsupported_provider_before_prompt_or_network(
