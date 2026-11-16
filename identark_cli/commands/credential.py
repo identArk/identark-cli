@@ -479,8 +479,8 @@ def _export_denied(path: str, response: object) -> CredentialExportDeniedError:
             f"Credential {path} is not exportable.",
             explanation=(
                 "IdentArk can use it on your agent's behalf but will not give its plaintext to a "
-                "local process. An org owner can allow local export for this credential in the "
-                "dashboard, or use a managed connector so the process never needs the raw secret."
+                "local process. An org owner can mark this credential exportable for local "
+                "development, or use a managed connector so the process never needs the raw secret."
             ),
         )
     if error_code == "agent_key_cannot_export":

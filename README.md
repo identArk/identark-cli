@@ -256,7 +256,7 @@ both of these hold:
   developer API key granted the `credentials:resolve` scope explicitly. No key
   preset and no `org:admin` key includes it, and agent-bound keys can never
   hold it; and
-- an org owner has marked the credential exportable in the dashboard.
+- an org owner has marked the credential exportable.
 
 Otherwise the command stops before starting the child process and says which
 of the two is missing.
