@@ -12,7 +12,7 @@ import typer
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
-from identark_cli.core.auth import get_api_client
+from identark_cli.core.auth import ENV_TOKEN_NAMES, get_api_client
 from identark_cli.core.config import CredentialRef, load_config, save_config
 from identark_cli.ui import console, error_console
 from identark_cli.ui.components import (
@@ -403,6 +403,10 @@ def inject(
             try:
                 value = _fetch_credential_value(cred.ref)
                 env_vars[cred.name] = value
+            except CredentialExportDeniedError as denied:
+                report_export_denied(
+                    cred.name, cred.required, denied, "The child process was not started."
+                )
             except Exception:
                 if cred.required:
                     render_error(
@@ -426,6 +430,88 @@ def inject(
     raise typer.Exit(result.returncode)
 
 
+_RESOLVE_SCOPE = "credentials:resolve"
+
+
+class CredentialExportDeniedError(Exception):
+    """IdentArk refused to export a credential for local injection (HTTP 403).
+
+    Carries user-facing guidance; never contains a secret.
+    """
+
+    def __init__(self, message: str, *, explanation: str, next_step: str | None = None) -> None:
+        super().__init__(message)
+        self.message = message
+        self.explanation = explanation
+        self.next_step = next_step
+
+
+def _environment_key_name() -> str | None:
+    """Name of the env var whose token the CLI is using, if it is an API key."""
+    for name in ENV_TOKEN_NAMES:
+        value = os.environ.get(name)
+        if value:
+            return name if value.startswith("csk_") else None
+    return None
+
+
+def _sign_in_step() -> str:
+    env_key = _environment_key_name()
+    if env_key:
+        # An API key in the environment takes precedence over device login.
+        return f"unset {env_key} && identark auth login"
+    return "identark auth login"
+
+
+def _export_denied(path: str, response: object) -> CredentialExportDeniedError:
+    """Translate a 403 from /v1/credentials/resolve into actionable guidance."""
+    error_code = ""
+    try:
+        body = response.json()  # type: ignore[attr-defined]
+        detail = body.get("detail", body) if isinstance(body, dict) else {}
+        if isinstance(detail, dict):
+            error_code = str(detail.get("error_code", ""))
+    except ValueError:
+        pass
+
+    if error_code == "credential_not_exportable":
+        return CredentialExportDeniedError(
+            f"Credential {path} is not exportable.",
+            explanation=(
+                "IdentArk can use it on your agent's behalf but will not give its plaintext to a "
+                "local process. An org owner can mark this credential exportable for local "
+                "development, or use a managed connector so the process never needs the raw secret."
+            ),
+        )
+    if error_code == "agent_key_cannot_export":
+        return CredentialExportDeniedError(
+            "This API key is bound to an agent and can never export credentials.",
+            explanation=(
+                "For local development, sign in with device login, or use a separate developer "
+                f"key granted {_RESOLVE_SCOPE} for a credential an org owner marked exportable."
+            ),
+            next_step=_sign_in_step(),
+        )
+    if error_code == "insufficient_scope":
+        return CredentialExportDeniedError(
+            f"This API key lacks the {_RESOLVE_SCOPE} scope needed for local injection.",
+            explanation=(
+                "Sign in with device login, or use a developer key granted "
+                f"{_RESOLVE_SCOPE} explicitly (org:admin and the key presets do not include it). "
+                "The credential must also be marked exportable by an org owner."
+            ),
+            next_step=_sign_in_step(),
+        )
+    return CredentialExportDeniedError(
+        f"IdentArk refused to export credential {path}.",
+        explanation=(
+            "Local injection needs device login or a developer key granted "
+            f"{_RESOLVE_SCOPE}, and a credential an org owner marked exportable."
+        ),
+        next_step=_sign_in_step(),
+    )
+
+
 def _fetch_credential_value(ref: str) -> str:
     """Fetch credential value from vault"""
     # Handle env:// references
@@ -442,6 +528,8 @@ def _fetch_credential_value(ref: str) -> str:
 
         with get_api_client() as client:
             response = client.get("/v1/credentials/resolve", params={"path": path})
+            if response.status_code == 403:
+                raise _export_denied(path, response)
             response.raise_for_status()
             data = response.json()
             if data.get("fields") is not None:
@@ -455,3 +543,22 @@ def _fetch_credential_value(ref: str) -> str:
             return value
 
     raise ValueError(f"Unknown credential reference format: {ref}")
+
+
+def report_export_denied(
+    name: str, required: bool, denied: CredentialExportDeniedError, consequence: str
+) -> None:
+    """Render an export refusal; exit 1 if the credential was required."""
+    if required:
+        render_error(
+            error_console,
+            f"Could not resolve required credential {name}: {denied.message}",
+            explanation=f"{denied.explanation} {consequence}",
+            next_step=denied.next_step,
+        )
+        raise typer.Exit(1)
+    render_warning(
+        console,
+        f"Optional credential {name} is unavailable: {denied.message}",
+        next_step=denied.next_step,
+    )

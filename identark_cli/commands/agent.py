@@ -15,6 +15,7 @@ import typer
 from rich.panel import Panel
 from rich.table import Table
 
+from identark_cli.commands.credential import CredentialExportDeniedError, report_export_denied
 from identark_cli.core.auth import get_api_client
 from identark_cli.core.config import ProjectConfig, load_config, save_config
 from identark_cli.ui import console, error_console
@@ -194,6 +195,8 @@ def run(
                 value = _fetch_credential_value(cred.ref)
                 env_vars[cred.name] = value
                 console.print(f"  ✓ [cyan]{cred.name}[/cyan] injected")
+            except CredentialExportDeniedError as denied:
+                report_export_denied(cred.name, cred.required, denied, "The agent was not started.")
             except Exception:
                 if cred.required:
                     render_error(
@@ -270,6 +273,10 @@ def dev(
             try:
                 value = _fetch_credential_value(cred.ref)
                 env_vars[cred.name] = value
+            except CredentialExportDeniedError as denied:
+                report_export_denied(
+                    cred.name, cred.required, denied, "Development mode was not started."
+                )
             except Exception:
                 if cred.required:
                     render_error(
