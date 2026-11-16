@@ -249,6 +249,18 @@ resolve scalar credentials and place them in the child process environment.
 The child process can read those values. This is useful for local development,
 but it is not a “secret never reaches the agent” boundary.
 
+Credentials are non-exportable by default, so local injection works only when
+both of these hold:
+
+- you are signed in with device login (`identark auth login`), or you use a
+  developer API key granted the `credentials:resolve` scope explicitly. No key
+  preset and no `org:admin` key includes it, and agent-bound keys can never
+  hold it; and
+- an org owner has marked the credential exportable in the dashboard.
+
+Otherwise the command stops before starting the child process and says which
+of the two is missing.
+
 For production database access or other operations where the agent must never
 receive a raw credential, use an IdentArk managed connector/executor. Structured
 credentials such as Neon database credentials are deliberately refused by local
