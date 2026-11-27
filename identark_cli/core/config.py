@@ -121,6 +121,8 @@ class GlobalConfig(BaseModel):
         local_http = parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1"}
         if not parsed.hostname or (parsed.scheme != "https" and not local_http):
             raise ValueError("API URL must use HTTPS (HTTP is allowed only for localhost)")
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError("API URL cannot contain credentials, query parameters, or fragments")
         return normalized
 
     # Auth - persisted via the secret store, not this file

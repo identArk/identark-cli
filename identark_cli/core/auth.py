@@ -13,13 +13,12 @@ from typing import Any
 
 import httpx
 import jwt
-from rich.console import Console
 
 from identark_cli import __version__
 from identark_cli.core import secrets as secret_store
 from identark_cli.core.config import GlobalConfig, load_global_config, save_global_config
-
-console = Console()
+from identark_cli.ui import console
+from identark_cli.ui.components import render_success
 
 FIREBASE_AUTH_BASE = "https://identitytoolkit.googleapis.com/v1"
 FIREBASE_SECURE_TOKEN_BASE = "https://securetoken.googleapis.com/v1"
@@ -99,7 +98,7 @@ def login(api_url: str = DEFAULT_API_URL, browser: bool = True) -> None:
 
     save_global_config(config)
 
-    console.print(f"✓ Logged in as [green]{config.user_email}[/green]")
+    render_success(console, f"Connected as {config.user_email or 'IdentArk user'}")
 
 
 def logout() -> None:
@@ -117,7 +116,7 @@ def logout() -> None:
     # Belt and braces: drop anything left in the keychain or file fallback.
     secret_store.clear_all()
 
-    console.print("✓ Logged out")
+    render_success(console, "Local session cleared")
 
 
 def get_access_token() -> str:

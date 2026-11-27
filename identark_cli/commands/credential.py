@@ -9,14 +9,22 @@ import re
 from pathlib import Path
 
 import typer
-from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from identark_cli.core.auth import get_api_client
 from identark_cli.core.config import CredentialRef, load_config, save_config
+from identark_cli.ui import console, error_console
+from identark_cli.ui.components import (
+    NextStep,
+    render_empty_state,
+    render_error,
+    render_next_steps,
+    render_success,
+    render_warning,
+)
+from identark_cli.ui.safety import safe_rich_text
 
-console = Console()
 app = typer.Typer(help="Credential references, scanning, and local injection")
 
 # This guided command deliberately starts with providers whose normal setup is
@@ -43,13 +51,21 @@ def list_credentials() -> None:
     """
     try:
         config = load_config()
-    except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
+    except Exception:
+        render_error(
+            error_console,
+            "Could not load credential references for this project.",
+            next_step="identark init",
+        )
         raise typer.Exit(1) from None
 
     if not config.credentials:
-        console.print("No credentials configured")
-        console.print("Run: [cyan]identark credential add <name>[/cyan]")
+        render_empty_state(
+            console,
+            "No credential references configured",
+            "References point to credentials without storing their values in the project.",
+            next_step="identark credential add <name> --env",
+        )
         return
 
     table = Table(title="Project Credential References")
@@ -88,8 +104,12 @@ def add(
     """
     try:
         config = load_config()
-    except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
+    except Exception:
+        render_error(
+            error_console,
+            "Could not load this project configuration.",
+            next_step="identark status",
+        )
         raise typer.Exit(1) from None
 
     # Determine reference
@@ -120,14 +140,20 @@ def add(
             required=required,
             description=description,
         )
-    except ValueError as exc:
-        console.print(f"[red]Invalid credential reference:[/red] {exc}")
+    except ValueError:
+        # Validation errors include the rejected input. A user may accidentally
+        # pass a real secret instead of a reference, so do not echo that text.
+        render_error(
+            error_console,
+            "Invalid credential reference.",
+            explanation="Use a valid environment name and a vault:// or env:// reference.",
+        )
         raise typer.Exit(2) from None
     config.credentials.append(credential)
     save_config(config)
 
-    console.print(f"✓ Added credential [cyan]{name}[/cyan]")
-    console.print(f"  Reference: {ref}")
+    render_success(console, f"Added credential reference {safe_rich_text(name)}")
+    console.print(f"  Reference: {safe_rich_text(ref)}")
 
 
 @app.command()
@@ -166,7 +192,11 @@ def connect(
         confirmation_prompt=True,
     ).strip()
     if not credential_value:
-        console.print("[red]Credential was not connected.[/red] Enter a non-empty API key.")
+        render_error(
+            error_console,
+            "Credential was not connected.",
+            explanation="Enter a non-empty provider API key in the hidden prompt.",
+        )
         raise typer.Exit(2)
 
     try:
@@ -186,8 +216,11 @@ def connect(
     except Exception:
         # Never display exception text or response bodies here: either could
         # contain a provider key supplied by a proxy or upstream service.
-        console.print(
-            "[red]Credential could not be connected.[/red] Check your login and try again."
+        render_error(
+            error_console,
+            "Credential could not be connected.",
+            explanation="Check your account connection and try again.",
+            next_step="identark auth status",
         )
         raise typer.Exit(1) from None
     finally:
@@ -196,19 +229,28 @@ def connect(
         credential_value = ""
 
     credential_ref = payload.get("credential_ref") if isinstance(payload, dict) else None
-    if not isinstance(credential_ref, str) or not credential_ref:
-        console.print(
-            "[red]Credential could not be connected.[/red] The server returned no vault reference."
+    if not isinstance(credential_ref, str) or not re.fullmatch(
+        r"(?:secret/|vault://)[A-Za-z0-9._/-]+", credential_ref
+    ):
+        render_error(
+            error_console,
+            "Credential could not be connected.",
+            explanation="IdentArk did not return a safe credential reference.",
         )
         raise typer.Exit(1)
 
-    console.print(f"[green]✓ {provider_name} credential connected[/green]")
-    console.print(f"  Vault reference: [cyan]{credential_ref}[/cyan]")
+    render_success(console, f"{provider_name} credential connected")
+    console.print(f"  Vault reference: [cyan]{safe_rich_text(credential_ref)}[/cyan]")
     console.print("  Provider key: stored in IdentArk; never written to this project")
-    console.print("\nNext, create a short-lived Gateway Mode capability:")
-    console.print(
-        f"  [cyan]identark promote --credential-ref {credential_ref} "
-        f"--provider {normalized_provider} --run[/cyan]"
+    render_next_steps(
+        console,
+        [
+            NextStep(
+                "Create a short-lived Gateway Mode capability",
+                f"identark promote --credential-ref {credential_ref} "
+                f"--provider {normalized_provider} --run",
+            )
+        ],
     )
 
 
@@ -224,8 +266,12 @@ def remove(
     """
     try:
         config = load_config()
-    except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
+    except Exception:
+        render_error(
+            error_console,
+            "Could not load this project configuration.",
+            next_step="identark status",
+        )
         raise typer.Exit(1) from None
 
     # Find credential
@@ -239,10 +285,13 @@ def remove(
 
             config.credentials.remove(cred)
             save_config(config)
-            console.print(f"✓ Removed credential [cyan]{name}[/cyan]")
+            render_success(console, f"Removed credential reference {safe_rich_text(name)}")
             return
 
-    console.print(f"[red]Credential '{name}' not found[/red]")
+    render_error(
+        error_console,
+        f"Credential reference '{safe_rich_text(name)}' was not found.",
+    )
     raise typer.Exit(1)
 
 
@@ -269,7 +318,7 @@ def scan(
         progress.stop()
 
     if not findings:
-        console.print("[green]✓ No secrets found[/green]")
+        render_success(console, "No secrets found")
         return
 
     # Display findings
@@ -296,18 +345,26 @@ def install_hook() -> None:
 
     root = get_project_root()
     if root is None:
-        console.print("[red]No IdentArk project found. Run 'identark init' first.[/red]")
+        render_error(
+            error_console,
+            "No IdentArk project was found.",
+            next_step="identark init",
+        )
         raise typer.Exit(1)
     try:
         install_git_hook(root)
-    except Exception as exc:
-        console.print(f"[red]Could not install hook:[/red] {exc}")
+    except Exception:
+        render_error(
+            error_console,
+            "Could not install the secret-scanning hook.",
+            explanation="Review the existing Git hook before replacing it.",
+        )
         raise typer.Exit(1) from None
 
     config = load_config()
     config.enable_git_hooks = True
     save_config(config)
-    console.print("[green]✓ Installed fail-closed pre-commit secret scanner[/green]")
+    render_success(console, "Installed fail-closed pre-commit secret scanner")
 
 
 @app.command()
@@ -330,8 +387,12 @@ def inject(
 
     try:
         config = load_config()
-    except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
+    except Exception:
+        render_error(
+            error_console,
+            "Could not load credential references for this project.",
+            next_step="identark credential list",
+        )
         raise typer.Exit(1) from None
 
     # Fetch credentials from vault
@@ -342,17 +403,24 @@ def inject(
             try:
                 value = _fetch_credential_value(cred.ref)
                 env_vars[cred.name] = value
-            except Exception as e:
+            except Exception:
                 if cred.required:
-                    console.print(
-                        f"[red]Failed to fetch required credential {cred.name}:[/red] {e}"
+                    render_error(
+                        error_console,
+                        f"Could not resolve required credential {cred.name}.",
+                        explanation="The child process was not started.",
                     )
                     raise typer.Exit(1) from None
-                console.print(f"[yellow]Warning:[/yellow] Could not fetch {cred.name}")
+                render_warning(console, f"Could not resolve optional credential {cred.name}.")
 
     # Run command with injected environment
-    console.print(f"Running: [cyan]{' '.join(command)}[/cyan]")
-    console.print("[dim]Credentials injected (masked)[/dim]\n")
+    console.print(
+        f"Running: [cyan]{safe_rich_text(command[0])}[/cyan] "
+        f"[dim]({len(command) - 1} argument(s))[/dim]"
+    )
+    console.print(
+        "[dim]Local development credentials are available only to the child process.[/dim]\n"
+    )
 
     result = subprocess.run(command, env=env_vars)
     raise typer.Exit(result.returncode)

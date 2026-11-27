@@ -6,14 +6,13 @@ import subprocess
 import sys
 
 import typer
-from rich.console import Console
 from rich.panel import Panel
 
 from identark_cli.core.auth import get_api_client
 from identark_cli.core.config import get_project_root, load_config
 from identark_cli.core.promotion import PromotionError, promote_project
-
-console = Console()
+from identark_cli.ui import console, error_console
+from identark_cli.ui.components import render_error, render_success
 
 
 def promote(
@@ -42,7 +41,11 @@ def promote(
     """
     root = get_project_root()
     if root is None:
-        console.print("[red]No IdentArk project found. Run `identark init` first.[/red]")
+        render_error(
+            error_console,
+            "No IdentArk project was found.",
+            next_step="identark init",
+        )
         raise typer.Exit(1)
     try:
         config = load_config(root / ".identark" / "config.toml")
@@ -59,11 +62,18 @@ def promote(
                 client=client,
             )
     except PromotionError as exc:
-        console.print(f"[red]Could not promote project:[/red] {exc}")
+        render_error(
+            error_console,
+            "Could not move this project to Gateway Mode.",
+            explanation=str(exc),
+        )
         raise typer.Exit(1) from None
     except Exception:
-        console.print(
-            "[red]Could not promote project. Check your sign-in, role, and vault reference.[/red]"
+        render_error(
+            error_console,
+            "Could not move this project to Gateway Mode.",
+            explanation="Check your account, role, and credential reference.",
+            next_step="identark auth status",
         )
         raise typer.Exit(1) from None
 
@@ -88,7 +98,7 @@ def promote(
                 "to inspect the recorded result.[/red]"
             )
             raise typer.Exit(completed.returncode)
-        console.print("[green]✓ Governed smoke test completed[/green]")
+        render_success(console, "Governed smoke test completed")
         console.print(
             "Run [cyan]identark audit list[/cyan] to inspect the authoritative activity trail."
         )

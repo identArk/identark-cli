@@ -5,21 +5,30 @@ Agent development and execution commands
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from enum import StrEnum
 from pathlib import Path
 
 import typer
-from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
 from identark_cli.core.auth import get_api_client
 from identark_cli.core.config import ProjectConfig, load_config, save_config
+from identark_cli.ui import console, error_console
+from identark_cli.ui.components import (
+    render_empty_state,
+    render_error,
+    render_success,
+    render_warning,
+)
+from identark_cli.ui.safety import safe_rich_text
 
-console = Console()
 app = typer.Typer(help="Agent scaffolding, registration, and local execution")
+
+_AGENT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 
 class AgentTemplate(StrEnum):
@@ -47,10 +56,18 @@ def init(
         slack-bot   - Slack bot with IdentArk integration
         api-service - FastAPI service with local credential injection
     """
+    if not _AGENT_NAME_PATTERN.fullmatch(name):
+        raise typer.BadParameter(
+            "must be 1-64 characters using letters, numbers, hyphens, or underscores",
+            param_hint="--name",
+        )
     project_path = Path(path) / name
 
     if project_path.exists():
-        console.print(f"[red]Directory {project_path} already exists[/red]")
+        render_error(
+            error_console,
+            f"Directory {safe_rich_text(project_path)} already exists.",
+        )
         raise typer.Exit(1)
 
     # Create project structure
@@ -111,13 +128,18 @@ def register(
             response = client.post("/v1/agents", json=payload)
             response.raise_for_status()
             registered = response.json()
-    except Exception as exc:
-        console.print(f"[red]Could not register agent:[/red] {exc}")
+    except Exception:
+        render_error(
+            error_console,
+            "Could not register this agent.",
+            explanation="Check your account, scope, and credential reference.",
+            next_step="identark auth status",
+        )
         raise typer.Exit(1) from None
 
-    console.print(f"[green]✓ Registered agent[/green] [cyan]{registered['name']}[/cyan]")
-    console.print(f"  ID: {registered['id']}")
-    console.print(f"  Agent key: {registered['agent_key']}")
+    render_success(console, f"Registered agent {safe_rich_text(registered['name'])}")
+    console.print(f"  ID: {safe_rich_text(registered['id'])}")
+    console.print(f"  Agent key: {safe_rich_text(registered['agent_key'])}")
 
 
 @app.command()
@@ -135,8 +157,12 @@ def run(
     """
     try:
         config = load_config()
-    except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
+    except Exception:
+        render_error(
+            error_console,
+            "Could not load this project configuration.",
+            next_step="identark init",
+        )
         raise typer.Exit(1) from None
 
     # Determine entry point
@@ -168,11 +194,15 @@ def run(
                 value = _fetch_credential_value(cred.ref)
                 env_vars[cred.name] = value
                 console.print(f"  ✓ [cyan]{cred.name}[/cyan] injected")
-            except Exception as e:
+            except Exception:
                 if cred.required:
-                    console.print(f"  [red]✗ {cred.name}:[/red] {e}")
+                    render_error(
+                        error_console,
+                        f"Could not resolve required credential {cred.name}.",
+                        explanation="The agent was not started.",
+                    )
                     raise typer.Exit(1) from None
-                console.print(f"  [yellow]⚠ {cred.name}:[/yellow] {e}")
+                render_warning(console, f"Optional credential {cred.name} is unavailable.")
 
     console.print()
 
@@ -204,8 +234,12 @@ def dev(
 
     try:
         config = load_config()
-    except Exception as exc:
-        console.print(f"[red]Error:[/red] {exc}")
+    except Exception:
+        render_error(
+            error_console,
+            "Could not load this project configuration.",
+            next_step="identark status",
+        )
         raise typer.Exit(1) from None
 
     # Check for common frameworks
@@ -236,18 +270,26 @@ def dev(
             try:
                 value = _fetch_credential_value(cred.ref)
                 env_vars[cred.name] = value
-            except Exception as exc:
+            except Exception:
                 if cred.required:
-                    console.print(f"[red]Required credential {cred.name} failed:[/red] {exc}")
+                    render_error(
+                        error_console,
+                        f"Could not resolve required credential {cred.name}.",
+                        explanation="Development mode was not started.",
+                    )
                     raise typer.Exit(1) from None
-                console.print(f"[yellow]Optional credential {cred.name} unavailable[/yellow]")
+                render_warning(console, f"Optional credential {cred.name} is unavailable.")
 
         result = subprocess.run(cmd, env=env_vars)
         raise typer.Exit(result.returncode)
     except typer.Exit:
         raise
-    except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
+    except Exception:
+        render_error(
+            error_console,
+            "Could not start agent development mode.",
+            explanation="Check the selected entry point and local dependencies.",
+        )
         raise typer.Exit(1) from None
 
 
@@ -271,8 +313,12 @@ def list(
             agents = response.json()
 
             if not agents:
-                console.print("[dim]No agents found.[/dim]")
-                console.print("  Register one with: [cyan]identark agent register --help[/cyan]")
+                render_empty_state(
+                    console,
+                    "No registered agents",
+                    "Register a working agent when it is ready for governed access.",
+                    next_step="identark agent register --help",
+                )
                 return
 
             table = Table(title="IdentArk Agents")
@@ -287,10 +333,10 @@ def list(
                     "[green]🟢 active[/green]" if agent["is_active"] else "[red]🔴 unboarded[/red]"
                 )
                 table.add_row(
-                    agent["id"],
-                    agent["name"],
-                    agent["agent_key"],
-                    f"{agent['provider']}/{agent['model']}",
+                    safe_rich_text(agent["id"]),
+                    safe_rich_text(agent["name"]),
+                    safe_rich_text(agent["agent_key"]),
+                    safe_rich_text(f"{agent['provider']}/{agent['model']}"),
                     status,
                 )
 
@@ -299,8 +345,13 @@ def list(
             if not all:
                 console.print("[dim]Use --all to see unboarded agents[/dim]")
 
-    except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
+    except Exception:
+        render_error(
+            error_console,
+            "Could not load registered agents.",
+            explanation="Check your connection and account permissions.",
+            next_step="identark auth status",
+        )
         raise typer.Exit(1) from None
 
 
@@ -326,15 +377,23 @@ def delete(
         with get_api_client() as client:
             response = client.delete(f"/v1/agents/{agent_id}")
             if response.status_code == 204:
-                console.print(f"✓ Agent [cyan]{agent_id}[/cyan] unboarded successfully")
+                render_success(console, f"Unboarded agent {safe_rich_text(agent_id)}")
                 console.print("  [dim]Sessions and audit trail preserved[/dim]")
             else:
-                console.print(f"[red]Error {response.status_code}:[/red] {response.text}")
+                render_error(
+                    error_console,
+                    "Could not unboard this agent.",
+                    explanation=f"IdentArk returned HTTP {response.status_code}.",
+                )
                 raise typer.Exit(1)
     except typer.Exit:
         raise
-    except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
+    except Exception:
+        render_error(
+            error_console,
+            "Could not unboard this agent.",
+            explanation="It may not exist or be outside your access scope.",
+        )
         raise typer.Exit(1) from None
 
 

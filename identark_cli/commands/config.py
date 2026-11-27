@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 import typer
-from rich.console import Console
 from rich.table import Table
 
 from identark_cli.core.config import (
@@ -20,8 +19,10 @@ from identark_cli.core.config import (
     save_config,
     save_global_config,
 )
+from identark_cli.ui import console, error_console
+from identark_cli.ui.components import render_empty_state, render_error, render_success
+from identark_cli.ui.safety import safe_rich_text
 
-console = Console()
 app = typer.Typer(help="Configuration management")
 
 _GLOBAL_EDITABLE_KEYS = {"api_url", "color_output", "default_org_id"}
@@ -53,10 +54,10 @@ def show_config(
         table.add_column("Setting", style="cyan")
         table.add_column("Value")
 
-        table.add_row("API URL", global_values.api_url)
+        table.add_row("API URL", safe_rich_text(global_values.api_url))
         table.add_row("Authenticated", str(global_values.is_authenticated))
-        table.add_row("User Email", global_values.user_email or "-")
-        table.add_row("Default Org", global_values.default_org_id or "-")
+        table.add_row("User Email", safe_rich_text(global_values.user_email or "-"))
+        table.add_row("Default Org", safe_rich_text(global_values.default_org_id or "-"))
 
         console.print(table)
     else:
@@ -69,8 +70,8 @@ def show_config(
             table.add_column("Setting", style="cyan")
             table.add_column("Value")
 
-            table.add_row("Project Name", project_values.project_name or "-")
-            table.add_row("Organization ID", project_values.organization_id or "-")
+            table.add_row("Project Name", safe_rich_text(project_values.project_name or "-"))
+            table.add_row("Organization ID", safe_rich_text(project_values.organization_id or "-"))
             table.add_row("Credentials", str(len(project_values.credentials)))
             table.add_row("Git Hooks", "Enabled" if project_values.enable_git_hooks else "Disabled")
             table.add_row(
@@ -82,11 +83,17 @@ def show_config(
             if project_values.credentials:
                 console.print("\n[bold]Credentials:[/bold]")
                 for cred in project_values.credentials:
-                    console.print(f"  • [cyan]{cred.name}[/cyan]: {cred.ref}")
+                    console.print(
+                        f"  • [cyan]{safe_rich_text(cred.name)}[/cyan]: {safe_rich_text(cred.ref)}"
+                    )
 
         except Exception:
-            console.print("[yellow]No project configuration found[/yellow]")
-            console.print("Run: [cyan]identark init[/cyan]")
+            render_empty_state(
+                console,
+                "No project configuration found",
+                "Initialize this directory before changing project settings.",
+                next_step="identark init",
+            )
 
 
 @app.command("set")
@@ -119,11 +126,21 @@ def set_config(
             setattr(project_values, key, _convert_value(value))
             save_config(project_values)
             scope = "project"
-    except Exception as exc:
-        console.print(f"[red]Could not update config:[/red] {exc}")
+    except ValueError:
+        render_error(
+            error_console,
+            f"Configuration key '{safe_rich_text(key)}' is unknown or protected.",
+        )
+        raise typer.Exit(2) from None
+    except Exception:
+        render_error(
+            error_console,
+            "Could not update configuration.",
+            explanation="Review the value and configuration-file permissions.",
+        )
         raise typer.Exit(2) from None
 
-    console.print(f"[green]✓ Updated {scope} config:[/green] {key} = {value}")
+    render_success(console, f"Updated {scope} setting {safe_rich_text(key)}")
 
 
 @app.command("get")
@@ -145,11 +162,17 @@ def get_config(
             if key not in _PROJECT_EDITABLE_KEYS | {"version"}:
                 raise ValueError(f"Unknown or protected project config key: {key}")
             value = getattr(load_config(), key)
-    except Exception as exc:
-        console.print(f"[red]Could not read config:[/red] {exc}")
+    except ValueError:
+        render_error(
+            error_console,
+            f"Configuration key '{safe_rich_text(key)}' is unknown or protected.",
+        )
+        raise typer.Exit(2) from None
+    except Exception:
+        render_error(error_console, "Could not read configuration.")
         raise typer.Exit(2) from None
 
-    console.print(value)
+    console.print(safe_rich_text(value))
 
 
 @app.command("edit")
@@ -169,17 +192,25 @@ def edit_config(
     else:
         try:
             config_file = _project_config_path()
-        except Exception as exc:
-            console.print(f"[red]Could not find project config:[/red] {exc}")
+        except Exception:
+            render_error(
+                error_console,
+                "No project configuration was found.",
+                next_step="identark init",
+            )
             raise typer.Exit(1) from None
 
     editor = os.environ.get("EDITOR", "vim")
 
     try:
         subprocess.run([editor, str(config_file)], check=True)
-        console.print(f"[green]✓ Edited {config_file}[/green]")
-    except Exception as e:
-        console.print(f"[red]Could not open editor:[/red] {e}")
+        render_success(console, f"Edited {config_file}")
+    except Exception:
+        render_error(
+            error_console,
+            "Could not open the configuration editor.",
+            explanation="Check the EDITOR setting and file permissions.",
+        )
         raise typer.Exit(1) from None
 
 
