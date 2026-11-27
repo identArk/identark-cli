@@ -19,6 +19,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Local credential injection (`credential inject`, `agent run`, `agent dev`)
+  explains why IdentArk refused to export a credential: the credential is not
+  exportable, the API key lacks the explicit `credentials:resolve` scope, or the
+  key is bound to an agent. It names the next step (device login, or the
+  environment variable whose API key shadows it) instead of a generic failure.
 - Standardised the repository's GitHub issue forms, pull-request template, and
   supply-chain automation.
 - Reworked high-frequency command output around plain-language human approvals,
