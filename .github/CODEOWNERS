@@ -1,14 +1,20 @@
-# Default review ownership
-* @Goldokpa
+# Default review ownership.
+#
+# Two owners, deliberately. With a single code owner and
+# "require review from Code Owners" enabled, that person's own pull requests
+# can never be approved by anyone, and Dependabot pull requests touching an
+# owned path stall indefinitely. That is what happened here: nine Dependabot
+# pull requests sat open for up to eleven weeks.
+* @Goldokpa @obielin
 
 # Security-sensitive public boundaries
-/identark_cli/core/auth.py @Goldokpa
-/identark_cli/core/secrets.py @Goldokpa
-/identark_cli/core/audit_evidence.py @Goldokpa
-/identark_cli/commands/approvals.py @Goldokpa
-/identark_cli/commands/credential.py @Goldokpa
-/identark_cli/commands/promote.py @Goldokpa
-/scripts/check_distribution.py @Goldokpa
-/SECURITY.md @Goldokpa
-/.github/workflows/ @Goldokpa
-/pyproject.toml @Goldokpa
+/identark_cli/core/auth.py @Goldokpa @obielin
+/identark_cli/core/secrets.py @Goldokpa @obielin
+/identark_cli/core/audit_evidence.py @Goldokpa @obielin
+/identark_cli/commands/approvals.py @Goldokpa @obielin
+/identark_cli/commands/credential.py @Goldokpa @obielin
+/identark_cli/commands/promote.py @Goldokpa @obielin
+/scripts/check_distribution.py @Goldokpa @obielin
+/SECURITY.md @Goldokpa @obielin
+/.github/workflows/ @Goldokpa @obielin
+/pyproject.toml @Goldokpa @obielin
